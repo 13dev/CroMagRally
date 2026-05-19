@@ -5,7 +5,6 @@
 
 #include "game.h"
 #include "menu.h"
-#include <SDL3/SDL_time.h>
 
 #define MAX_RECORDS_PER_SCREEN 5
 #define NODES_PER_RECORD 6

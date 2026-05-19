@@ -21,7 +21,6 @@ project(${GAME_TARGET}
 
 option(BUILD_SDL_FROM_SOURCE "Build SDL from source" OFF)
 option(SDL_STATIC "Static link SDL" OFF)
-
 option(SANITIZE "Build with asan/ubsan" OFF)
 
 if(WIN32 OR APPLE)
@@ -82,19 +81,46 @@ if(NOT BUILD_SDL_FROM_SOURCE)
 	find_package(SDL3 CONFIG REQUIRED)
 	message("Found pre-built SDL3")
 else()
-	if(NOT DEFINED SDL3_DIR)
-		set(SDL3_DIR "${CMAKE_SOURCE_DIR}/extern/SDL")
-	endif()
-	message("Building SDL3 from source: " ${SDL3_DIR})
-	add_subdirectory("${SDL3_DIR}" EXCLUDE_FROM_ALL)
+	# Fetch SDL3 via FetchContent
+	include(FetchContent)
+	FetchContent_Declare(
+		SDL3
+		GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+		GIT_TAG release-3.2.14
+		GIT_SHALLOW TRUE
+		GIT_PROGRESS TRUE
+	)
+	set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+	set(SDL_STATIC ON CACHE BOOL "" FORCE)
+	set(SDL_TEST OFF CACHE BOOL "" FORCE)
+	FetchContent_MakeAvailable(SDL3)
+
+	# Point find_package to the FetchContent build directory
+	set(SDL3_DIR "${sdl3_BINARY_DIR}" CACHE PATH "" FORCE)
+
+	message("Building SDL3 from source via FetchContent")
 endif()
+
+#------------------------------------------------------------------------------
+# FETCH ENET (for LAN multiplayer)
+#------------------------------------------------------------------------------
+
+include(FetchContent)
+FetchContent_Declare(
+    enet
+    GIT_REPOSITORY https://github.com/lsalzman/enet.git
+    GIT_TAG v1.3.18
+    GIT_SHALLOW TRUE
+    GIT_PROGRESS TRUE
+)
+FetchContent_MakeAvailable(enet)
+message("Using ENet for LAN multiplayer")
 
 #------------------------------------------------------------------------------
 # DEPENDENCIES
 #------------------------------------------------------------------------------
 
 add_subdirectory(extern/Pomme)
-
 find_package(OpenGL REQUIRED)
 
 #------------------------------------------------------------------------------
@@ -104,8 +130,24 @@ find_package(OpenGL REQUIRED)
 # Write header file containing version info
 configure_file(${GAME_SRCDIR}/Headers/version.h.in ${GAME_SRCDIR}/Headers/version.h)
 
-# Glob all source files
-file(GLOB_RECURSE GAME_SOURCES CONFIGURE_DEPENDS ${GAME_SRCDIR}/*.c ${GAME_SRCDIR}/*.cpp ${GAME_SRCDIR}/*.h)
+# Glob all source files (excluding backend-specific sources)
+file(GLOB_RECURSE GAME_SOURCES CONFIGURE_DEPENDS
+	${GAME_SRCDIR}/*.c
+	${GAME_SRCDIR}/*.cpp
+	${GAME_SRCDIR}/*.h
+)
+
+# Remove backend-specific sources from the main glob
+list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend/SDL3/.*")
+list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend/Raylib/.*")
+
+# Add SDL3 backend sources
+file(GLOB BACKEND_SOURCES CONFIGURE_DEPENDS
+	${GAME_SRCDIR}/Backend/SDL3/*.c
+	${GAME_SRCDIR}/Backend/SDL3/*.cpp
+)
+
+list(APPEND GAME_SOURCES ${BACKEND_SOURCES})
 
 # Make source groups match file tree
 source_group(TREE ${GAME_SRCDIR} PREFIX "" FILES ${GAME_SOURCES})
@@ -121,7 +163,11 @@ endif()
 
 add_executable(${GAME_TARGET} ${GAME_SOURCES})
 
-target_include_directories(${GAME_TARGET} PRIVATE ${GAME_SRCDIR}/Headers)
+target_include_directories(${GAME_TARGET} PRIVATE
+	${GAME_SRCDIR}/Headers
+	${GAME_SRCDIR}/Backend
+	${enet_SOURCE_DIR}/include
+)
 
 #------------------------------------------------------------------------------
 # COMPILER/LINKER OPTIONS
@@ -211,8 +257,14 @@ else()
 	target_link_libraries(${GAME_TARGET} PRIVATE SDL3::SDL3-static)
 endif()
 
-# Link core dependencies
-target_link_libraries(${GAME_TARGET} PRIVATE Pomme OpenGL::GL)
+# Link OpenGL
+target_link_libraries(${GAME_TARGET} PRIVATE OpenGL::GL)
+
+# Link Pomme
+target_link_libraries(${GAME_TARGET} PRIVATE Pomme)
+
+# Link ENet for LAN multiplayer
+target_link_libraries(${GAME_TARGET} PRIVATE enet)
 
 # Add required frameworks for KillMacMouseAcceleration
 if(APPLE)

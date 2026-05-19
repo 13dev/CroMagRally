@@ -9,7 +9,6 @@
 #include "game.h"
 #include "menu.h"
 
-#include <SDL3/SDL_opengl.h>
 #include <math.h>
 
 #define DECLARE_WORKBUF(buf, bufSize) char (buf)[256]; const int (bufSize) = 256

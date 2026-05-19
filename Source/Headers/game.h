@@ -1,6 +1,8 @@
 #pragma once
 
-#include <SDL3/SDL.h>
+// Backend abstraction - includes SDL3 or raylib headers as appropriate
+#include "Backend.h"
+
 #include <stddef.h>
 #include <stdbool.h>
 

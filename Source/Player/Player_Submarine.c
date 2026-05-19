@@ -10,7 +10,6 @@
 /****************************/
 
 #include "game.h"
-#include <SDL3/SDL_scancode.h>
 
 /****************************/
 /*    PROTOTYPES            */

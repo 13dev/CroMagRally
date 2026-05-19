@@ -13,6 +13,7 @@
 #include "game.h"
 #include "miscscreens.h"
 #include "network.h"
+#include <stdio.h>
 
 
 /****************************/
@@ -71,13 +72,31 @@ static int		gNumVehiclesToChooseFrom;
 
 Boolean DoMultiPlayerVehicleSelections(void)
 {
+	printf("DoMultiPlayerVehicleSelections: Starting (gNetGameInProgress=%d, gMyNetworkPlayerNum=%d)\n",
+		   gNetGameInProgress, gMyNetworkPlayerNum);
+	fflush(stdout);
+
 	if (gNetGameInProgress)
 	{
 		// TODO: We should allow bailing out of Character/Vehicle Select screens, even if we started a net game.
+		printf("DoMultiPlayerVehicleSelections: Calling DoCharacterSelectScreen for player %d\n", gMyNetworkPlayerNum);
+		fflush(stdout);
 		DoCharacterSelectScreen(gMyNetworkPlayerNum, false);		// get player's sex
+
+		printf("DoMultiPlayerVehicleSelections: Calling DoVehicleSelectScreen for player %d\n", gMyNetworkPlayerNum);
+		fflush(stdout);
 		DoVehicleSelectScreen(gMyNetworkPlayerNum, false);			// get this player's vehicle
+
+		printf("DoMultiPlayerVehicleSelections: Calling PlayerBroadcastVehicleType\n");
+		fflush(stdout);
 		PlayerBroadcastVehicleType();								// tell other net players about my type
+
+		printf("DoMultiPlayerVehicleSelections: Calling GetVehicleSelectionFromNetPlayers\n");
+		fflush(stdout);
 		GetVehicleSelectionFromNetPlayers();						// get types from other net players
+
+		printf("DoMultiPlayerVehicleSelections: Done\n");
+		fflush(stdout);
 		return false;
 	}
 	else

@@ -1015,7 +1015,7 @@ Ptr						imageFileData = nil;
 
 			/* CLEAN UP */
 
-	SafeDisposePtr(pixelData);
+	stbi_image_free(pixelData);  // Use stbi's free, not game allocator
 
 	if (outWidth)
 		*outWidth = width;

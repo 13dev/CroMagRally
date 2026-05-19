@@ -1,5 +1,4 @@
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_gamepad.h>
+#include "game.h"
 #include "input.h"
 
 #if __APPLE__

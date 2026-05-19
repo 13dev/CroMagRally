@@ -68,7 +68,7 @@ static const MenuItem gMainMenuTree[] =
 	{kMIPick, STR_2PLAYER,	.id=2, .callback=OnConfirmPlayMenu, .next='mpgm' },
 	{kMIPick, STR_3PLAYER,	.id=3, .callback=OnConfirmPlayMenu, .next='mpgm' },
 	{kMIPick, STR_4PLAYER,	.id=4, .callback=OnConfirmPlayMenu, .next='mpgm' },
-//	{kMIPick, STR_NET_GAME,	.id=0, .callback=OnConfirmPlayMenu, .next='netg' },
+	{kMIPick, STR_NET_GAME,	.id=0, .callback=OnConfirmPlayMenu, .next='netg' },
 
 	{ .id='optn' },
 	{
@@ -113,7 +113,7 @@ static const MenuItem gMainMenuTree[] =
 
 	{ .id='netg' },
 	{kMIPick, STR_HOST_NET_GAME, .callback=OnPickHostOrJoin, .id=0, .next='mpgm' }, // host gets to select game type
-	{kMIPick, STR_JOIN_NET_GAME, .callback=OnPickHostOrJoin, .id=1 },
+	{kMIPick, STR_JOIN_NET_GAME, .callback=OnPickHostOrJoin, .id=1, .next='EXIT' }, // client goes straight to join screen
 
 	{ .id='clrs' },
 	{kMILabel, .text=STR_CLEAR_SAVED_GAME_TEXT_1 },
@@ -285,21 +285,40 @@ do_again:
 			// necessary information about the game from the Host to the other players.
 			//
 
-	if (gNetGameInProgress)
+	printf("DoMainMenuScreen: Network setup - gIsNetworkHost=%d, gIsNetworkClient=%d\n",
+		   gIsNetworkHost, gIsNetworkClient);
+	fflush(stdout);
+
+	if (gIsNetworkHost)
 	{
-		if (gIsNetworkHost)
+		printf("DoMainMenuScreen: Calling DoNetworkHostGatherScreen...\n");
+		fflush(stdout);
+		if (DoNetworkHostGatherScreen())				// do hosting gather screen and check for abort
 		{
-			if (SetupNetworkHosting())						// do hosting dialog and check for abort
-				goto do_again;
+			printf("DoMainMenuScreen: DoNetworkHostGatherScreen aborted\n");
+			fflush(stdout);
+			goto do_again;
 		}
-		else
+		printf("DoMainMenuScreen: DoNetworkHostGatherScreen succeeded\n");
+		fflush(stdout);
+	}
+	else if (gIsNetworkClient)
+	{
+		printf("DoMainMenuScreen: Calling DoNetworkJoinScreen...\n");
+		fflush(stdout);
+		if (DoNetworkJoinScreen())						// do join screen and check for abort
 		{
-			if (SetupNetworkJoin())							// get joining info and check for abort
-				goto do_again;
+			printf("DoMainMenuScreen: DoNetworkJoinScreen aborted\n");
+			fflush(stdout);
+			goto do_again;
 		}
+		printf("DoMainMenuScreen: DoNetworkJoinScreen succeeded\n");
+		fflush(stdout);
 	}
 	else
+	{
 		gMyNetworkPlayerNum = 0;
+	}
 }
 
 

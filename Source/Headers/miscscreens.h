@@ -28,6 +28,9 @@ Boolean DoVehicleSelectScreen(short whichPlayer, Boolean allowAborting);
 
 Boolean DoLocalGatherScreen(void);
 
+Boolean DoNetworkHostGatherScreen(void);
+Boolean DoNetworkJoinScreen(void);
+
 void DoPhysicsEditor(void);
 
 void RegisterSettingsMenu(const MenuItem* junk);
