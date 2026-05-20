@@ -1,0 +1,29 @@
+# Fly.io configuration for Cro-Mag Rally Signaling Server
+# Deploy: cd signaling-server && fly launch
+# https://fly.io/docs/reference/configuration/
+
+app = "cromag-signaling"
+primary_region = "ams"  # Amsterdam, change as needed: iad, lax, sin, etc.
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "27015"
+
+# TCP service on port 27015
+[[services]]
+  internal_port = 27015
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 27015
+
+# Optional HTTP health check on different port (if you add HTTP endpoint)
+# [[services.http_checks]]
+#   interval = 10000
+#   grace_period = "5s"
+#   method = "get"
+#   path = "/health"
+#   protocol = "http"
+#   timeout = 2000
