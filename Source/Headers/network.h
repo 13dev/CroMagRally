@@ -97,21 +97,18 @@ typedef struct
 void InitNetworkManager(void);
 void EndNetworkGame(void);
 
-// Host/Join setup
+// Host/Join setup (room code based)
 Boolean SetupNetworkHosting(void);
-Boolean SetupNetworkJoin(void);
+Boolean SetupNetworkJoinWithRoomCode(const char* roomCode);
 
-// LAN Discovery
-void StartLANGameScan(void);
-void StopLANGameScan(void);
-int UpdateLANGameList(void);
-const LANGameInfo* GetLANGameInfo(int index);
-void SelectLANGame(int index);
-int GetSelectedLANGame(void);
-int GetNumLANGames(void);
+// Room state
+const char* GetNetworkRoomCode(void);
+NetConnectionState GetNetworkState(void);
+const char* GetNetworkStatusMessage(void);
 
 // Host gathering
 int HostGetGatheredPlayerCount(void);
+int HostGetP2PConnectedCount(void);
 void HostUpdateGathering(void);
 void HostSendGameConfig(void);
 

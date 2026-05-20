@@ -2,7 +2,7 @@
 /*   	  NETWORK.C	   	    */
 /* (c)2000 Pangea Software  */
 /* By Brian Greenstone      */
-/* ENet port (c)2026        */
+/* GNS P2P port (c)2026     */
 /****************************/
 
 
@@ -24,6 +24,8 @@
 static void OnClientConnected(int peerIndex);
 static void OnClientDisconnected(int peerIndex);
 static void OnMessageReceived(int peerIndex, const void* data, size_t size);
+static void OnStateChanged(NetConnectionState newState, const char* message);
+static void OnPlayerName(int playerIndex, const char* name);
 static void HandleNetworkMessage(int fromPeer, const void* data, size_t size);
 static void PlayerUnexpectedlyLeavesGame(int playerIndex);
 
@@ -64,7 +66,7 @@ Boolean		gIsNetworkHost = false;
 Boolean		gIsNetworkClient = false;
 Boolean		gNetGameInProgress = false;
 
-void*       gNetGame = NULL;                    // Not used with ENet, kept for compatibility
+void*       gNetGame = NULL;                    // Not used with GNS, kept for compatibility
 
 Str32		gPlayerNameStrings[MAX_PLAYERS];
 
@@ -91,13 +93,11 @@ static NetClientControlInfoMessageType  gPendingClientControl[MAX_PLAYERS];
 static bool                             gPendingVehicleTypeMessage[MAX_PLAYERS];
 static NetPlayerCharTypeMessage         gPendingVehicleType[MAX_PLAYERS];
 
-// LAN discovery results
-static LANGameInfo                      gLANGames[NET_MAX_DISCOVERED_GAMES];
-static int                              gNumLANGames = 0;
-static int                              gSelectedLANGame = -1;
-
 // Player name for network
 static char                             gLocalPlayerName[NET_PLAYER_NAME_LENGTH] = "Player";
+
+// Status message for UI
+static char                             gNetworkStatusMessage[128] = "";
 
 
 /******************* INIT NETWORK MANAGER *********************/
@@ -118,8 +118,10 @@ void InitNetworkManager(void)
         Net_SetConnectCallback(OnClientConnected);
         Net_SetDisconnectCallback(OnClientDisconnected);
         Net_SetReceiveCallback(OnMessageReceived);
+        Net_SetStateChangeCallback(OnStateChanged);
+        Net_SetPlayerNameCallback(OnPlayerName);
 
-        printf("InitNetworkManager: Network initialized successfully\n");
+        printf("InitNetworkManager: Network initialized successfully (GNS P2P)\n");
         fflush(stdout);
     }
     else
@@ -149,6 +151,7 @@ void EndNetworkGame(void)
     gIsNetworkClient    = false;
     gNetGame            = NULL;
     gNumGatheredPlayers = 0;
+    gNetworkStatusMessage[0] = '\0';
 
     printf("EndNetworkGame: Network game ended\n");
 }
@@ -180,18 +183,13 @@ Boolean SetupNetworkHosting(void)
     memset(gPendingClientControlMessage, 0, sizeof(gPendingClientControlMessage));
     memset(gPendingVehicleTypeMessage, 0, sizeof(gPendingVehicleTypeMessage));
 
-    // Get game mode name for broadcast
-    const char* gameModeName = Localize(STR_RACE + (gGameMode - GAME_MODE_MULTIPLAYERRACE));
-
-    // Create ENet host
-    if (!Net_CreateHost(NET_GAME_PORT, MAX_PLAYERS))
+    // Create host and register with signaling server
+    if (!Net_CreateHost(gLocalPlayerName))
     {
-        printf("SetupNetworkHosting: Failed to create host\n");
+        printf("SetupNetworkHosting: Failed to create host - %s\n", Net_GetLastError());
+        snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Failed: %s", Net_GetLastError());
         return true;
     }
-
-    // Start broadcasting for LAN discovery
-    Net_StartBroadcast(gameModeName, gLocalPlayerName, gGameMode);
 
     gIsNetworkHost = true;
     gIsNetworkClient = false;
@@ -201,28 +199,30 @@ Boolean SetupNetworkHosting(void)
     // Store host's name
     snprintf((char*)gPlayerNameStrings[0], sizeof(gPlayerNameStrings[0]), "%s", gLocalPlayerName);
 
-    printf("SetupNetworkHosting: Hosting game '%s' on port %d\n", gameModeName, NET_GAME_PORT);
+    snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Connecting to server...");
+    printf("SetupNetworkHosting: Registering with signaling server\n");
     return false;  // Success
 }
 
 
-/*************** SETUP NETWORK JOIN ************************/
+/*************** SETUP NETWORK JOIN WITH ROOM CODE ************************/
 //
-// OUTPUT:	false == let's go!
-//			true = cancel
+// Join a game using a 4-character room code
+// OUTPUT:	false == success
+//			true = error
 //
 
-Boolean SetupNetworkJoin(void)
+Boolean SetupNetworkJoinWithRoomCode(const char* roomCode)
 {
     if (!gNetSprocketInitialized)
     {
-        printf("SetupNetworkJoin: Network not initialized\n");
+        printf("SetupNetworkJoinWithRoomCode: Network not initialized\n");
         return true;
     }
 
-    if (gSelectedLANGame < 0 || gSelectedLANGame >= gNumLANGames)
+    if (!roomCode || strlen(roomCode) != NET_ROOM_CODE_LENGTH)
     {
-        printf("SetupNetworkJoin: No game selected\n");
+        printf("SetupNetworkJoinWithRoomCode: Invalid room code '%s'\n", roomCode ? roomCode : "NULL");
         return true;
     }
 
@@ -235,100 +235,109 @@ Boolean SetupNetworkJoin(void)
     memset(gPendingVehicleTypeMessage, 0, sizeof(gPendingVehicleTypeMessage));
     memset(gPendingClientControlMessage, 0, sizeof(gPendingClientControlMessage));
 
-    // Get selected game info
-    LANGameInfo* game = &gLANGames[gSelectedLANGame];
-
-    // Connect to the host
-    if (!Net_Connect(game->hostIP, game->hostPort))
+    // Join the game
+    if (!Net_JoinGame(roomCode, gLocalPlayerName))
     {
-        printf("SetupNetworkJoin: Failed to connect\n");
+        printf("SetupNetworkJoinWithRoomCode: Failed to join - %s\n", Net_GetLastError());
+        snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Failed: %s", Net_GetLastError());
         return true;
     }
 
     gIsNetworkHost = false;
     gIsNetworkClient = true;
 
-    char ipStr[32];
-    Net_IPToString(game->hostIP, ipStr, sizeof(ipStr));
-    printf("SetupNetworkJoin: Connecting to %s:%d\n", ipStr, game->hostPort);
+    snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Joining room %s...", roomCode);
+    printf("SetupNetworkJoinWithRoomCode: Joining room %s\n", roomCode);
 
     return false;  // Success (connection initiated)
 }
 
 
-#pragma mark - LAN Discovery
+#pragma mark - Room State
 
-/****************** START LAN GAME SCAN *********************/
 
-void StartLANGameScan(void)
+/****************** GET NETWORK ROOM CODE *********************/
+
+const char* GetNetworkRoomCode(void)
 {
-    if (!gNetSprocketInitialized)
-        return;
-
-    gNumLANGames = 0;
-    gSelectedLANGame = -1;
-    memset(gLANGames, 0, sizeof(gLANGames));
-
-    Net_StartDiscovery();
-    printf("StartLANGameScan: Scanning for LAN games...\n");
+    return Net_GetRoomCode();
 }
 
 
-/****************** STOP LAN GAME SCAN *********************/
+/****************** GET NETWORK STATE *********************/
 
-void StopLANGameScan(void)
+NetConnectionState GetNetworkState(void)
 {
-    Net_StopDiscovery();
+    return Net_GetState();
 }
 
 
-/****************** UPDATE LAN GAME LIST *********************/
+/****************** GET NETWORK STATUS MESSAGE *********************/
 
-int UpdateLANGameList(void)
+const char* GetNetworkStatusMessage(void)
 {
-    if (!gNetSprocketInitialized)
-        return 0;
-
-    // Process network events to receive discovery packets
-    Net_ProcessEvents(0);
-
-    // Get updated list
-    gNumLANGames = Net_GetDiscoveredGames(gLANGames, NET_MAX_DISCOVERED_GAMES);
-
-    return gNumLANGames;
-}
-
-
-/****************** GET LAN GAME INFO *********************/
-
-const LANGameInfo* GetLANGameInfo(int index)
-{
-    if (index < 0 || index >= gNumLANGames)
-        return NULL;
-    return &gLANGames[index];
-}
-
-
-/****************** SELECT LAN GAME *********************/
-
-void SelectLANGame(int index)
-{
-    if (index >= 0 && index < gNumLANGames)
-        gSelectedLANGame = index;
-    else
-        gSelectedLANGame = -1;
-}
-
-
-/****************** GET SELECTED LAN GAME *********************/
-
-int GetSelectedLANGame(void)
-{
-    return gSelectedLANGame;
+    return gNetworkStatusMessage;
 }
 
 
 #pragma mark - Network Callbacks
+
+
+/****************** ON STATE CHANGED *********************/
+
+static void OnStateChanged(NetConnectionState newState, const char* message)
+{
+    switch (newState)
+    {
+        case NET_STATE_DISCONNECTED:
+            snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Disconnected");
+            break;
+
+        case NET_STATE_CONNECTING_SIGNALING:
+            snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Connecting to server...");
+            break;
+
+        case NET_STATE_WAITING_ROOM:
+            if (gIsNetworkHost)
+                snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Creating room...");
+            else
+                snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Joining room...");
+            break;
+
+        case NET_STATE_IN_LOBBY:
+            if (gIsNetworkHost && Net_GetRoomCode())
+                snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Room Code: %s", Net_GetRoomCode());
+            else
+                snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "In lobby");
+            break;
+
+        case NET_STATE_CONNECTING_P2P:
+            snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Establishing connection...");
+            break;
+
+        case NET_STATE_CONNECTED:
+            snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Connected!");
+            break;
+
+        case NET_STATE_ERROR:
+            snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Error: %s", message ? message : "Unknown");
+            break;
+    }
+
+    printf("OnStateChanged: %s\n", gNetworkStatusMessage);
+}
+
+
+/****************** ON PLAYER NAME *********************/
+
+static void OnPlayerName(int playerIndex, const char* name)
+{
+    if (playerIndex >= 0 && playerIndex < MAX_PLAYERS && name)
+    {
+        snprintf((char*)gPlayerNameStrings[playerIndex], sizeof(gPlayerNameStrings[0]), "%s", name);
+        printf("OnPlayerName: Player %d name set to: %s\n", playerIndex, name);
+    }
+}
 
 
 /****************** ON CLIENT CONNECTED *********************/
@@ -337,13 +346,19 @@ static void OnClientConnected(int peerIndex)
 {
     if (gIsNetworkHost)
     {
-        // A new client joined
-        int playerNum = peerIndex + 1;  // Host is player 0, clients start at 1
+        // A new client joined the lobby
+        // Note: Player name is already set by OnPlayerName callback (called before this)
+        int playerNum = peerIndex;  // peerIndex is already the player number from signaling
         if (playerNum < MAX_PLAYERS)
         {
-            gNumGatheredPlayers++;
-            snprintf((char*)gPlayerNameStrings[playerNum], sizeof(gPlayerNameStrings[0]), "Player %d", playerNum + 1);
-            printf("OnClientConnected: Player %d joined (peer %d)\n", playerNum, peerIndex);
+            gNumGatheredPlayers = Net_GetPlayerCount();
+            // Only set default name if OnPlayerName hasn't set it already
+            if (gPlayerNameStrings[playerNum][0] == '\0')
+            {
+                snprintf((char*)gPlayerNameStrings[playerNum], sizeof(gPlayerNameStrings[0]), "Player %d", playerNum + 1);
+            }
+            printf("OnClientConnected: Player %d (%s) joined (total: %d)\n",
+                   playerNum, gPlayerNameStrings[playerNum], gNumGatheredPlayers);
         }
     }
     else
@@ -360,10 +375,17 @@ static void OnClientDisconnected(int peerIndex)
 {
     if (gIsNetworkHost)
     {
-        int playerNum = peerIndex + 1;
-        printf("OnClientDisconnected: Player %d left (peer %d)\n", playerNum, peerIndex);
+        int playerNum = peerIndex;
+        printf("OnClientDisconnected: Player %d left\n", playerNum);
+
+        // Clear player name from display list
+        if (playerNum >= 0 && playerNum < MAX_PLAYERS)
+        {
+            gPlayerNameStrings[playerNum][0] = '\0';
+        }
+
         PlayerUnexpectedlyLeavesGame(playerNum);
-        gNumGatheredPlayers--;
+        gNumGatheredPlayers = Net_GetPlayerCount();
     }
     else
     {
@@ -468,7 +490,18 @@ static void HandleNetworkMessage(int fromPeer, const void* data, size_t size)
 
 int HostGetGatheredPlayerCount(void)
 {
-    return gNumGatheredPlayers;
+    return Net_GetPlayerCount();
+}
+
+
+/********************* HOST GET P2P CONNECTED COUNT *********************/
+//
+// Returns number of P2P connected clients (for host to show connection status)
+//
+
+int HostGetP2PConnectedCount(void)
+{
+    return Net_GetP2PConnectionCount();
 }
 
 
@@ -480,12 +513,14 @@ int HostGetGatheredPlayerCount(void)
 void HostUpdateGathering(void)
 {
     Net_ProcessEvents(0);
+    gNumGatheredPlayers = Net_GetPlayerCount();
 }
 
 
 /********************* HOST SEND GAME CONFIG *********************/
 //
 // Send game configuration to all clients when starting
+// P2P connections should already be established (clients connect when joining lobby)
 //
 
 void HostSendGameConfig(void)
@@ -493,8 +528,54 @@ void HostSendGameConfig(void)
     if (!gIsNetworkHost)
         return;
 
-    // Stop advertising since we're starting
-    Net_StopBroadcast();
+    int expectedClients = gNumGatheredPlayers - 1;  // Excluding host
+    int connectedClients = Net_GetP2PConnectionCount();
+
+    printf("HostSendGameConfig: Starting game with %d/%d P2P connections\n",
+           connectedClients, expectedClients);
+    fflush(stdout);
+
+    // Notify signaling server that game is starting
+    Net_StartGame();
+
+    // Wait for P2P connections - ICE negotiation can take time even on localhost
+    // Increased timeout to 15 seconds to allow ICE candidate gathering to complete
+    if (connectedClients < expectedClients)
+    {
+        uint32_t startTick = SDL_GetTicks();
+        int lastReportedCount = connectedClients;
+        printf("HostSendGameConfig: Waiting for P2P connections (%d/%d)...\n",
+               connectedClients, expectedClients);
+        fflush(stdout);
+
+        while (connectedClients < expectedClients && (SDL_GetTicks() - startTick) < 15000)
+        {
+            Net_ProcessEvents(50);
+            SDL_PumpEvents();  // Keep window responsive while waiting
+            int newCount = Net_GetP2PConnectionCount();
+            if (newCount != lastReportedCount)
+            {
+                printf("HostSendGameConfig: P2P connections: %d/%d\n", newCount, expectedClients);
+                fflush(stdout);
+                lastReportedCount = newCount;
+            }
+            connectedClients = newCount;
+        }
+
+        if (connectedClients < expectedClients)
+        {
+            printf("HostSendGameConfig: Warning: Only %d/%d clients connected after 15s\n",
+                   connectedClients, expectedClients);
+            fflush(stdout);
+        }
+    }
+
+    printf("HostSendGameConfig: Proceeding with %d connected clients\n", connectedClients);
+    fflush(stdout);
+
+    // Small delay to ensure connections are stable
+    SDL_Delay(100);
+    Net_ProcessEvents(0);
 
     // Send config to each client
     for (int i = 1; i < gNumGatheredPlayers; i++)
@@ -513,7 +594,8 @@ void HostSendGameConfig(void)
         config->difficulty = gGamePrefs.difficulty;
         config->tagDuration = gGamePrefs.tagDuration;
 
-        Net_SendToPeer(i - 1, buffer, sizeof(buffer), true);
+        Net_SendToPeer(i, buffer, sizeof(buffer), true);
+        printf("HostSendGameConfig: Sent config to player %d\n", i);
     }
 
     gNumRealPlayers = gNumGatheredPlayers;
@@ -941,12 +1023,48 @@ void GetVehicleSelectionFromNetPlayers(void)
     printf("GetVehicleSelectionFromNetPlayers: Waiting for %d other players\n", gNumRealPlayers - 1);
     fflush(stdout);
 
+    /*****************************/
+    /* SET UP SIMPLE WAIT SCREEN */
+    /*****************************/
+
+    OGLSetupInputType viewDef;
+    OGL_NewViewDef(&viewDef);
+    viewDef.view.clearColor = (OGLColorRGBA) { 0, 0, 0, 1 };
+    viewDef.styles.useFog = false;
+    viewDef.view.pillarboxRatio = PILLARBOX_RATIO_4_3;
+    viewDef.view.fontName = "rockfont";
+    OGL_SetupGameView(&viewDef);
+
+    // Create waiting message text
+    NewObjectDefinitionType textDef =
+    {
+        .coord = {0, 50, 0},
+        .scale = 0.4f,
+        .slot = SPRITE_SLOT,
+    };
+    ObjNode* waitText = TextMesh_New(Localize(STR_WAITING_FOR_PLAYERS), kTextMeshAlignCenter, &textDef);
+    waitText->ColorFilter = (OGLColorRGBA) {1, 1, 1, 1};
+
+    // Create status text (shows count)
+    textDef.coord.y = -20;
+    textDef.scale = 0.25f;
+    ObjNode* statusText = TextMesh_New("", kTextMeshAlignCenter, &textDef);
+    statusText->ColorFilter = (OGLColorRGBA) {0.7f, 0.7f, 0.7f, 1};
+
+    MakeFadeEvent(true);
+
+    /*************/
+    /* MAIN LOOP */
+    /*************/
+
     int count = 1;  // We have our own info
     uint32_t startTick = SDL_GetTicks();
     uint32_t lastPrint = 0;
 
     while (count < gNumRealPlayers)
     {
+        CalcFramesPerSecond();
+        ReadKeyboard();
         Net_ProcessEvents(10);
 
         for (int i = 0; i < gNumRealPlayers; i++)
@@ -968,6 +1086,11 @@ void GetVehicleSelectionFromNetPlayers(void)
             }
         }
 
+        // Update status text
+        char statusStr[64];
+        SDL_snprintf(statusStr, sizeof(statusStr), "%d / %d", count, gNumRealPlayers);
+        TextMesh_Update(statusStr, kTextMeshAlignCenter, statusText);
+
         // Print status every 2 seconds
         uint32_t now = SDL_GetTicks();
         if (now - lastPrint > 2000)
@@ -981,9 +1104,23 @@ void GetVehicleSelectionFromNetPlayers(void)
         // Timeout after 2 minutes
         if ((SDL_GetTicks() - startTick) > (60 * 1000 * 2))
         {
+            DeleteAllObjects();
+            OGL_DisposeGameView();
             DoFatalAlert("GetVehicleSelectionFromNetPlayers: Timeout waiting for other players.");
         }
+
+        // Draw the waiting screen
+        MoveObjects();
+        OGL_DrawScene(DrawObjects);
     }
+
+    /***********/
+    /* CLEANUP */
+    /***********/
+
+    OGL_FadeOutScene(DrawObjects, MoveObjects);
+    DeleteAllObjects();
+    OGL_DisposeGameView();
 
     printf("GetVehicleSelectionFromNetPlayers: Got all vehicle selections!\n");
     fflush(stdout);
@@ -1057,12 +1194,4 @@ void SetLocalPlayerName(const char* name)
 {
     strncpy(gLocalPlayerName, name, NET_PLAYER_NAME_LENGTH - 1);
     gLocalPlayerName[NET_PLAYER_NAME_LENGTH - 1] = '\0';
-}
-
-
-/********************* GET NUM LAN GAMES *******************************/
-
-int GetNumLANGames(void)
-{
-    return gNumLANGames;
 }

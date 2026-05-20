@@ -95,30 +95,25 @@ else()
 	set(SDL_TEST OFF CACHE BOOL "" FORCE)
 	FetchContent_MakeAvailable(SDL3)
 
-	# Point find_package to the FetchContent build directory
-	set(SDL3_DIR "${sdl3_BINARY_DIR}" CACHE PATH "" FORCE)
+	# Create SDL3::SDL3 alias so Pomme's find_package can find it
+	# FetchContent creates SDL3::SDL3-static but Pomme expects SDL3::SDL3
+	if(NOT TARGET SDL3::SDL3)
+		add_library(SDL3::SDL3 ALIAS SDL3-static)
+	endif()
+
+	# Mark SDL3 as found so Pomme skips find_package
+	set(SDL3_FOUND TRUE CACHE BOOL "" FORCE)
 
 	message("Building SDL3 from source via FetchContent")
 endif()
 
 #------------------------------------------------------------------------------
-# FETCH ENET (for LAN multiplayer)
-#------------------------------------------------------------------------------
-
-include(FetchContent)
-FetchContent_Declare(
-    enet
-    GIT_REPOSITORY https://github.com/lsalzman/enet.git
-    GIT_TAG v1.3.18
-    GIT_SHALLOW TRUE
-    GIT_PROGRESS TRUE
-)
-FetchContent_MakeAvailable(enet)
-message("Using ENet for LAN multiplayer")
-
-#------------------------------------------------------------------------------
 # DEPENDENCIES
 #------------------------------------------------------------------------------
+
+# Add cmake/ to module path so Pomme finds our custom FindSDL3.cmake
+# when SDL3 is built from source via FetchContent
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 add_subdirectory(extern/Pomme)
 find_package(OpenGL REQUIRED)
@@ -166,7 +161,6 @@ add_executable(${GAME_TARGET} ${GAME_SOURCES})
 target_include_directories(${GAME_TARGET} PRIVATE
 	${GAME_SRCDIR}/Headers
 	${GAME_SRCDIR}/Backend
-	${enet_SOURCE_DIR}/include
 )
 
 #------------------------------------------------------------------------------
@@ -181,6 +175,15 @@ target_compile_definitions(${GAME_TARGET} PRIVATE
 	HQ_TERRAIN=1
 	ENABLE_LOADING_SCREEN=0
 	GL_SILENCE_DEPRECATION)
+
+# Windows-specific defines (both MSVC and MinGW)
+if(WIN32)
+	target_compile_definitions(${GAME_TARGET} PRIVATE
+		WIN32_LEAN_AND_MEAN
+		NOGDI				# don't clash with Mac function names
+		NOUSER				# don't clash with Mac function names
+	)
+endif()
 
 if(NOT MSVC)
 	target_compile_options(${GAME_TARGET} PRIVATE
@@ -208,12 +211,6 @@ if(NOT MSVC)
 		)
 	endif()
 else()
-	target_compile_definitions(${GAME_TARGET} PRIVATE
-		WIN32_LEAN_AND_MEAN
-		NOGDI				# don't clash with Mac function names
-		NOUSER				# don't clash with Mac function names
-	)
-
 	target_compile_options(${GAME_TARGET} PRIVATE
 		/EHs	# synchronous exceptions; also, extern "C" functions may throw exceptions
 		/W4
@@ -240,6 +237,11 @@ endif()
 # LINK LIBRARIES
 #------------------------------------------------------------------------------
 
+# MinGW: statically link GCC runtime to avoid DLL dependencies
+if(WIN32 AND NOT MSVC)
+	target_link_options(${GAME_TARGET} PRIVATE -static-libgcc -static-libstdc++ -static)
+endif()
+
 # Link sanitizers first
 if(SANITIZE)
 	target_link_libraries(${GAME_TARGET} PRIVATE asan ubsan)
@@ -263,8 +265,10 @@ target_link_libraries(${GAME_TARGET} PRIVATE OpenGL::GL)
 # Link Pomme
 target_link_libraries(${GAME_TARGET} PRIVATE Pomme)
 
-# Link ENet for LAN multiplayer
-target_link_libraries(${GAME_TARGET} PRIVATE enet)
+# Windows socket library for networking
+if(WIN32)
+	target_link_libraries(${GAME_TARGET} PRIVATE ws2_32)
+endif()
 
 # Add required frameworks for KillMacMouseAcceleration
 if(APPLE)
@@ -355,8 +359,8 @@ if(APPLE)
 endif()
 
 # Windows-specific libraries
-if(WIN32)
-	# Copy SDL3 DLLs to output folder on Windows for convenience
+if(WIN32 AND NOT SDL_STATIC)
+	# Copy SDL3 DLLs to output folder on Windows for convenience (only for shared builds)
 	add_custom_command(TARGET ${GAME_TARGET} POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:${GAME_TARGET}> $<TARGET_FILE_DIR:${GAME_TARGET}>)
 
