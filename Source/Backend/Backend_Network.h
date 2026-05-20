@@ -24,7 +24,7 @@ extern "C" {
 #define NET_PLAYER_NAME_LENGTH  32
 
 // Default signaling server (can be overridden)
-#define NET_DEFAULT_SIGNALING_HOST  "cromag-signaling.onrender.com"
+#define NET_DEFAULT_SIGNALING_HOST  "cromag-signaling.fly.dev"
 
 //==============================================================================
 // CONNECTION STATE
