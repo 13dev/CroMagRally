@@ -1,6 +1,12 @@
 name: Make Release Builds
 
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/networking
+    tags:
+      - 'v*'
 
 jobs:
   build-linux-appimage:
