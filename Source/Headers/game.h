@@ -1,6 +1,8 @@
 #pragma once
 
-#include <SDL3/SDL.h>
+// Backend abstraction - includes SDL3 or raylib headers as appropriate
+#include "Backend.h"
+
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -42,6 +44,7 @@
 #include "racetimes.h"
 #include "uieffects.h"
 #include "window.h"
+#include "network.h"
 
 extern Atlas*					gAtlases[MAX_SPRITE_GROUPS];
 extern BG3DFileContainer		*gBG3DContainerList[MAX_BG3D_GROUPS];

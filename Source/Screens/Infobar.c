@@ -11,6 +11,7 @@
 /****************************/
 
 #include "game.h"
+#include "network.h"
 #include <stddef.h>
 
 /****************************/
@@ -18,6 +19,10 @@
 /****************************/
 
 static void MakeInfobar(void);
+static void MakeNetworkStandings(void);
+static void MoveNetworkStandings(ObjNode* theNode);
+static void MakePlayerNameLabels(void);
+static void MovePlayerNameLabel(ObjNode* theNode);
 static void DrawInfobar(ObjNode* theNode);
 
 static void Infobar_DrawMap(Byte whichPane);
@@ -166,6 +171,13 @@ ObjNode			*gFinalPlaceObj = nil;
 Boolean			gHideInfobar = false;
 
 ObjNode			*gWinLoseString[MAX_PLAYERS];
+
+// Network standings list (shows player names and positions during race)
+static ObjNode	*gNetworkStandingsText[MAX_PLAYERS];
+static ObjNode	*gNetworkStandingsHeader = nil;
+
+// Player name labels above cars
+static ObjNode	*gPlayerNameLabels[MAX_PLAYERS];
 
 ObjNode			*gInfobarIconObjs[MAX_SPLITSCREENS][NUM_INFOBAR_ICONTYPES][MAX_SUBICONS];
 
@@ -644,6 +656,10 @@ static void MakeInfobar(void)
 			}
 			break;
 	}
+
+	// Network game standings and name labels
+	MakeNetworkStandings();
+	MakePlayerNameLabels();
 }
 
 
@@ -1917,5 +1933,328 @@ static void MovePressAnyKey(ObjNode* theNode)
 {
 	theNode->SpecialF[0] += gFramesPerSecondFrac * 4.0f;
 	theNode->ColorFilter.a = 0.66f + sinf(theNode->SpecialF[0]) * 0.33f;
+}
+
+
+#pragma mark - Network Standings & Name Labels
+
+/******************** MAKE NETWORK STANDINGS ***************************/
+//
+// Creates the standings list showing player names and positions (network games only)
+//
+
+static void MakeNetworkStandings(void)
+{
+	if (!gNetGameInProgress)
+		return;
+
+	// Initialize array
+	for (int i = 0; i < MAX_PLAYERS; i++)
+	{
+		gNetworkStandingsText[i] = nil;
+	}
+	gNetworkStandingsHeader = nil;
+
+	// Position standings below the "1st/2nd/3rd" place indicator
+	// ICON_PLACE is at x=68, y=48 with kAnchorTopLeft
+	// We position our standings below it with margin
+	float baseX = 20;  // Left edge, same as place indicator
+	float baseY = 120;  // Below the place indicator with margin
+
+	// Create header text "STANDINGS"
+	NewObjectDefinitionType def =
+	{
+		.genre = TEXTMESH_GENRE,
+		.coord = {baseX, baseY, 0},
+		.scale = 0.22f,
+		.slot = SPRITE_SLOT,
+		.flags = STATUS_BITS_FOR_2D | STATUS_BIT_OVERLAYPANE,
+		.projection = kProjectionType2DOrthoFullRect,
+	};
+
+	gNetworkStandingsHeader = TextMesh_New("STANDINGS", kTextMeshAlignLeft, &def);
+	gNetworkStandingsHeader->ColorFilter = (OGLColorRGBA) {1, 0.9f, 0.3f, 0.9f};
+
+	// Create text objects for each potential player
+	def.scale = 0.18f;
+	for (int i = 0; i < gNumTotalPlayers && i < MAX_PLAYERS; i++)
+	{
+		def.coord.y = baseY + 22 + i * 18;  // Start below header, 18px spacing
+		gNetworkStandingsText[i] = TextMesh_NewEmpty(48, &def);
+		gNetworkStandingsText[i]->MoveCall = MoveNetworkStandings;
+		gNetworkStandingsText[i]->PlayerNum = i;  // Store player index
+	}
+}
+
+
+/******************** MOVE NETWORK STANDINGS ***************************/
+//
+// Updates the standings text each frame
+//
+
+static void MoveNetworkStandings(ObjNode* theNode)
+{
+	if (!gNetGameInProgress || gHideInfobar)
+	{
+		theNode->StatusBits |= STATUS_BIT_HIDDEN;
+		return;
+	}
+
+	theNode->StatusBits &= ~STATUS_BIT_HIDDEN;
+
+	// Build sorted list of players by place
+	int sortedPlayers[MAX_PLAYERS];
+	for (int i = 0; i < gNumTotalPlayers; i++)
+	{
+		sortedPlayers[i] = i;
+	}
+
+	// Sort by place (bubble sort, small array)
+	for (int i = 0; i < gNumTotalPlayers - 1; i++)
+	{
+		for (int j = 0; j < gNumTotalPlayers - i - 1; j++)
+		{
+			if (gPlayerInfo[sortedPlayers[j]].place > gPlayerInfo[sortedPlayers[j+1]].place)
+			{
+				int temp = sortedPlayers[j];
+				sortedPlayers[j] = sortedPlayers[j+1];
+				sortedPlayers[j+1] = temp;
+			}
+		}
+	}
+
+	// Update text for this entry
+	int displayIndex = theNode->PlayerNum;
+	if (displayIndex < gNumTotalPlayers)
+	{
+		int playerIndex = sortedPlayers[displayIndex];
+		int place = gPlayerInfo[playerIndex].place + 1;  // 1-based
+
+		// Get player name (sanitized for display)
+		char safeName[20];
+		int j = 0;
+		for (int i = 0; i < 16 && gPlayerNameStrings[playerIndex][i]; i++)
+		{
+			char c = gPlayerNameStrings[playerIndex][i];
+			if ((c >= 'a') && (c <= 'z'))
+				c = 'A' + (c - 'a');
+			if (SDL_strchr(PLAYER_NAME_SAFE_CHARSET, c))
+				safeName[j++] = c;
+		}
+		safeName[j] = '\0';
+
+		// Format: "1. PLAYERNAME"
+		char text[32];
+		SDL_snprintf(text, sizeof(text), "%d. %s", place, safeName);
+
+		TextMesh_Update(text, kTextMeshAlignLeft, theNode);
+
+		// Color based on position
+		if (playerIndex == gMyNetworkPlayerNum)
+		{
+			// Highlight our own player in green
+			theNode->ColorFilter = (OGLColorRGBA) {0.3f, 1.0f, 0.3f, 1.0f};
+		}
+		else if (place == 1)
+		{
+			// 1st place in gold
+			theNode->ColorFilter = (OGLColorRGBA) {1.0f, 0.85f, 0.2f, 1.0f};
+		}
+		else
+		{
+			// Others in white
+			theNode->ColorFilter = (OGLColorRGBA) {0.9f, 0.9f, 0.9f, 0.9f};
+		}
+	}
+}
+
+
+/******************** MAKE PLAYER NAME LABELS ***************************/
+//
+// Creates floating name labels above each player's car (network games only)
+//
+
+static void MakePlayerNameLabels(void)
+{
+	if (!gNetGameInProgress)
+		return;
+
+	// Initialize array
+	for (int i = 0; i < MAX_PLAYERS; i++)
+	{
+		gPlayerNameLabels[i] = nil;
+	}
+
+	printf("[Infobar] MakePlayerNameLabels: gNumTotalPlayers=%d, gMyNetworkPlayerNum=%d\n",
+		   gNumTotalPlayers, gMyNetworkPlayerNum);
+
+	// Create name label for each player
+	for (int i = 0; i < gNumTotalPlayers && i < MAX_PLAYERS; i++)
+	{
+		// Skip creating label for local player (we don't need to see our own name)
+		if (i == gMyNetworkPlayerNum)
+			continue;
+
+		// Use 2D projection - we'll calculate screen position in move function
+		NewObjectDefinitionType def =
+		{
+			.genre = TEXTMESH_GENRE,
+			.coord = {320, 240, 0},  // Start at center of screen
+			.scale = 0.25f,
+			.slot = SPRITE_SLOT + 100,  // Draw after most sprites
+			.flags = STATUS_BITS_FOR_2D | STATUS_BIT_GLOW,
+			.projection = kProjectionType2DOrthoFullRect,
+			.moveCall = MovePlayerNameLabel,
+		};
+
+		// Create with placeholder - will update text in move function
+		gPlayerNameLabels[i] = TextMesh_NewEmpty(24, &def);
+		gPlayerNameLabels[i]->PlayerNum = i;  // Store which player this label is for
+		gPlayerNameLabels[i]->ColorFilter = (OGLColorRGBA) {1.0f, 1.0f, 0.8f, 0.9f};
+
+		printf("[Infobar] Created label for player %d, name='%s'\n", i, gPlayerNameStrings[i]);
+	}
+}
+
+
+/******************** MOVE PLAYER NAME LABEL ***************************/
+//
+// Updates name label position to follow the car
+//
+
+static void MovePlayerNameLabel(ObjNode* theNode)
+{
+	int playerIndex = theNode->PlayerNum;
+
+	// Hide if player is eliminated or game over
+	if (gPlayerInfo[playerIndex].isEliminated || gGameOver || gHideInfobar)
+	{
+		theNode->StatusBits |= STATUS_BIT_HIDDEN;
+		return;
+	}
+
+	// Get car position
+	ObjNode* carObj = gPlayerInfo[playerIndex].objNode;
+	if (!carObj)
+	{
+		theNode->StatusBits |= STATUS_BIT_HIDDEN;
+		return;
+	}
+
+	// Update text with current player name (in case it wasn't set at creation)
+	char safeName[20];
+	int j = 0;
+	for (int k = 0; k < 12 && gPlayerNameStrings[playerIndex][k]; k++)
+	{
+		char c = gPlayerNameStrings[playerIndex][k];
+		if ((c >= 'a') && (c <= 'z'))
+			c = 'A' + (c - 'a');
+		if (SDL_strchr(PLAYER_NAME_SAFE_CHARSET, c))
+			safeName[j++] = c;
+	}
+	safeName[j] = '\0';
+	if (j > 0)
+	{
+		TextMesh_Update(safeName, kTextMeshAlignCenter, theNode);
+	}
+
+	// Get 3D world position above car
+	OGLPoint3D worldPos;
+	worldPos.x = carObj->Coord.x;
+	worldPos.y = carObj->Coord.y + 200.0f;  // Height above car
+	worldPos.z = carObj->Coord.z;
+
+	// Use pane 0 for network games (always single screen)
+	int pane = 0;
+	OGLPoint3D* camPos = &gGameView->cameraPlacement[pane].cameraLocation;
+	OGLPoint3D* camLookAt = &gGameView->cameraPlacement[pane].pointOfInterest;
+
+	// Calculate vector from camera to point
+	float dx = worldPos.x - camPos->x;
+	float dy = worldPos.y - camPos->y;
+	float dz = worldPos.z - camPos->z;
+
+	// Calculate camera forward vector
+	float camFwdX = camLookAt->x - camPos->x;
+	float camFwdY = camLookAt->y - camPos->y;
+	float camFwdZ = camLookAt->z - camPos->z;
+	float camFwdLen = sqrtf(camFwdX*camFwdX + camFwdY*camFwdY + camFwdZ*camFwdZ);
+	if (camFwdLen > 0.001f)
+	{
+		camFwdX /= camFwdLen;
+		camFwdY /= camFwdLen;
+		camFwdZ /= camFwdLen;
+	}
+
+	// Check if point is behind camera (dot product with forward)
+	float dot = dx*camFwdX + dy*camFwdY + dz*camFwdZ;
+	if (dot < 50.0f)  // Behind camera or too close
+	{
+		theNode->StatusBits |= STATUS_BIT_HIDDEN;
+		return;
+	}
+
+	// Simple perspective projection
+	// Project point relative to camera
+	float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+	if (dist < 10.0f) dist = 10.0f;
+
+	// Calculate camera right vector (cross product of forward and up)
+	float camUpX = 0, camUpY = 1, camUpZ = 0;  // Assume Y-up
+	float camRightX = camFwdY * camUpZ - camFwdZ * camUpY;
+	float camRightY = camFwdZ * camUpX - camFwdX * camUpZ;
+	float camRightZ = camFwdX * camUpY - camFwdY * camUpX;
+	float rightLen = sqrtf(camRightX*camRightX + camRightY*camRightY + camRightZ*camRightZ);
+	if (rightLen > 0.001f)
+	{
+		camRightX /= rightLen;
+		camRightY /= rightLen;
+		camRightZ /= rightLen;
+	}
+
+	// Calculate actual up vector (cross product of right and forward)
+	float camActualUpX = camRightY * camFwdZ - camRightZ * camFwdY;
+	float camActualUpY = camRightZ * camFwdX - camRightX * camFwdZ;
+	float camActualUpZ = camRightX * camFwdY - camRightY * camFwdX;
+
+	// Project the point-to-camera vector onto camera right and up
+	float rightProj = dx*camRightX + dy*camRightY + dz*camRightZ;
+	float upProj = dx*camActualUpX + dy*camActualUpY + dz*camActualUpZ;
+
+	// Get viewport dimensions
+	float lw = gGameView->panes[pane].logicalWidth;
+	float lh = gGameView->panes[pane].logicalHeight;
+
+	// Calculate screen position with perspective
+	float fov = gGameView->fov[pane];
+	float fovFactor = tanf(fov * 0.5f);
+	float perspScale = 1.0f / (dot * fovFactor);
+
+	float screenX = (lw * 0.5f) + (rightProj * perspScale * lh * 0.5f);
+	float screenY = (lh * 0.5f) - (upProj * perspScale * lh * 0.5f);
+
+	// Clamp to screen bounds with margin
+	float margin = 50.0f;
+	if (screenX < margin || screenX > lw - margin ||
+		screenY < margin || screenY > lh - margin)
+	{
+		theNode->StatusBits |= STATUS_BIT_HIDDEN;
+		return;
+	}
+
+	theNode->StatusBits &= ~STATUS_BIT_HIDDEN;
+
+	// Set position
+	theNode->Coord.x = screenX;
+	theNode->Coord.y = screenY;
+	theNode->Coord.z = 0;
+
+	// Scale based on distance (farther = smaller)
+	float baseScale = 0.25f;
+	float distScale = 1500.0f / dist;  // Normalize at ~1500 units
+	distScale = GAME_CLAMP(distScale, 0.15f, 0.4f);
+	theNode->Scale.x = theNode->Scale.y = baseScale * distScale;
+
+	UpdateObjectTransforms(theNode);
 }
 

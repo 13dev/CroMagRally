@@ -11,8 +11,6 @@
 
 #include "game.h"
 #include "miscscreens.h"
-#include "network.h"
-#include <SDL3/SDL.h>
 
 
 /****************************/
@@ -179,17 +177,30 @@ void InitDefaultPrefs(void)
 
 static Boolean PlayGame(void)
 {
+	printf("PlayGame: Starting (gGameMode=%d, gNetGameInProgress=%d, gNumLocalPlayers=%d)\n",
+		   gGameMode, gNetGameInProgress, gNumLocalPlayers);
+	fflush(stdout);
+
 	UnlockPlayerGamepadMapping();
 
 	if (gNetGameInProgress)
+	{
+		printf("PlayGame: Setting default physics for net game\n");
+		fflush(stdout);
 		SetDefaultPhysics();								// set all physics to defaults for net game
+	}
 
 	if (!gIsSelfRunningDemo && gNumLocalPlayers > 1)
 	{
+		printf("PlayGame: Doing local gather screen\n");
+		fflush(stdout);
 		if (DoLocalGatherScreen())
 			return true;
 		LockPlayerGamepadMapping();
 	}
+
+	printf("PlayGame: Switching on game mode %d\n", gGameMode);
+	fflush(stdout);
 
 	bool bailed = false;
 
@@ -510,10 +521,17 @@ short	placeToWin,startStage;
 
 static Boolean PlayGame_MultiplayerRace(void)
 {
+	printf("PlayGame_MultiplayerRace: Starting\n");
+	fflush(stdout);
+
 			/* SET PLAYER INFO */
 
+	printf("PlayGame_MultiplayerRace: Calling InitPlayerInfo_Game\n");
+	fflush(stdout);
 	InitPlayerInfo_Game();											// init player info for entire game
 
+	printf("PlayGame_MultiplayerRace: InitPlayerInfo_Game done\n");
+	fflush(stdout);
 
 			/***********************/
 			/* GAME INITIALIZATION */
@@ -524,14 +542,27 @@ static Boolean PlayGame_MultiplayerRace(void)
 			// Must do this after InitPlayerInfo_Game above!
 			//
 
+	printf("PlayGame_MultiplayerRace: Calling DoMultiPlayerVehicleSelections\n");
+	fflush(stdout);
 	if (DoMultiPlayerVehicleSelections())
+	{
+		printf("PlayGame_MultiplayerRace: DoMultiPlayerVehicleSelections aborted\n");
+		fflush(stdout);
 		return true;
-
+	}
+	printf("PlayGame_MultiplayerRace: DoMultiPlayerVehicleSelections done\n");
+	fflush(stdout);
 
 			/* LOAD TRACK */
 
+	printf("PlayGame_MultiplayerRace: Loading track %d\n", gTrackNum);
+	fflush(stdout);
 	ShowLoadingPicture();									// show track intro screen
+	printf("PlayGame_MultiplayerRace: Calling InitArea\n");
+	fflush(stdout);
 	InitArea();
+	printf("PlayGame_MultiplayerRace: InitArea done, calling PlayArea\n");
+	fflush(stdout);
 
 			/* PLAY TRACK */
 
@@ -886,6 +917,10 @@ ObjNode* bigArrowhead = NULL;
 
 static void PlayArea(void)
 {
+	printf("PlayArea: Starting (gIsNetworkHost=%d, gIsNetworkClient=%d, gNumRealPlayers=%d)\n",
+		   gIsNetworkHost, gIsNetworkClient, gNumRealPlayers);
+	fflush(stdout);
+
 	/* IF DOING NET GAME THEN WAIT FOR SYNC */
 	//
 	// Need to wait for other players to finish loading art and when
@@ -894,10 +929,22 @@ static void PlayArea(void)
 
 
 	if (gIsNetworkHost)
+	{
+		printf("PlayArea: Calling HostWaitForPlayersToPrepareLevel...\n");
+		fflush(stdout);
 		HostWaitForPlayersToPrepareLevel();
+		printf("PlayArea: HostWaitForPlayersToPrepareLevel done\n");
+		fflush(stdout);
+	}
 	else
 	if (gIsNetworkClient)
+	{
+		printf("PlayArea: Calling ClientTellHostLevelIsPrepared...\n");
+		fflush(stdout);
 		ClientTellHostLevelIsPrepared();
+		printf("PlayArea: ClientTellHostLevelIsPrepared done\n");
+		fflush(stdout);
+	}
 
 
 			/* PREP STUFF */
@@ -1689,10 +1736,18 @@ void GameMain(void)
 
 	while(true)
 	{
+		printf("GameMain: Starting main loop iteration\n");
+		fflush(stdout);
 		PlaySong(SONG_THEME, true);
+		printf("GameMain: Calling DoMainMenuScreen\n");
+		fflush(stdout);
 		DoMainMenuScreen();
+		printf("GameMain: DoMainMenuScreen returned, calling PlayGame\n");
+		fflush(stdout);
 
 		PlayGame();
+		printf("GameMain: PlayGame returned\n");
+		fflush(stdout);
 	}
 }
 

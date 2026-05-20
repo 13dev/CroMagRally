@@ -21,7 +21,6 @@ project(${GAME_TARGET}
 
 option(BUILD_SDL_FROM_SOURCE "Build SDL from source" OFF)
 option(SDL_STATIC "Static link SDL" OFF)
-
 option(SANITIZE "Build with asan/ubsan" OFF)
 
 if(WIN32 OR APPLE)
@@ -82,19 +81,41 @@ if(NOT BUILD_SDL_FROM_SOURCE)
 	find_package(SDL3 CONFIG REQUIRED)
 	message("Found pre-built SDL3")
 else()
-	if(NOT DEFINED SDL3_DIR)
-		set(SDL3_DIR "${CMAKE_SOURCE_DIR}/extern/SDL")
+	# Fetch SDL3 via FetchContent
+	include(FetchContent)
+	FetchContent_Declare(
+		SDL3
+		GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+		GIT_TAG release-3.2.14
+		GIT_SHALLOW TRUE
+		GIT_PROGRESS TRUE
+	)
+	set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+	set(SDL_STATIC ON CACHE BOOL "" FORCE)
+	set(SDL_TEST OFF CACHE BOOL "" FORCE)
+	FetchContent_MakeAvailable(SDL3)
+
+	# Create SDL3::SDL3 alias so Pomme's find_package can find it
+	# FetchContent creates SDL3::SDL3-static but Pomme expects SDL3::SDL3
+	if(NOT TARGET SDL3::SDL3)
+		add_library(SDL3::SDL3 ALIAS SDL3-static)
 	endif()
-	message("Building SDL3 from source: " ${SDL3_DIR})
-	add_subdirectory("${SDL3_DIR}" EXCLUDE_FROM_ALL)
+
+	# Mark SDL3 as found so Pomme skips find_package
+	set(SDL3_FOUND TRUE CACHE BOOL "" FORCE)
+
+	message("Building SDL3 from source via FetchContent")
 endif()
 
 #------------------------------------------------------------------------------
 # DEPENDENCIES
 #------------------------------------------------------------------------------
 
-add_subdirectory(extern/Pomme)
+# Add cmake/ to module path so Pomme finds our custom FindSDL3.cmake
+# when SDL3 is built from source via FetchContent
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
+add_subdirectory(extern/Pomme)
 find_package(OpenGL REQUIRED)
 
 #------------------------------------------------------------------------------
@@ -104,8 +125,24 @@ find_package(OpenGL REQUIRED)
 # Write header file containing version info
 configure_file(${GAME_SRCDIR}/Headers/version.h.in ${GAME_SRCDIR}/Headers/version.h)
 
-# Glob all source files
-file(GLOB_RECURSE GAME_SOURCES CONFIGURE_DEPENDS ${GAME_SRCDIR}/*.c ${GAME_SRCDIR}/*.cpp ${GAME_SRCDIR}/*.h)
+# Glob all source files (excluding backend-specific sources)
+file(GLOB_RECURSE GAME_SOURCES CONFIGURE_DEPENDS
+	${GAME_SRCDIR}/*.c
+	${GAME_SRCDIR}/*.cpp
+	${GAME_SRCDIR}/*.h
+)
+
+# Remove backend-specific sources from the main glob
+list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend/SDL3/.*")
+list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend/Raylib/.*")
+
+# Add SDL3 backend sources
+file(GLOB BACKEND_SOURCES CONFIGURE_DEPENDS
+	${GAME_SRCDIR}/Backend/SDL3/*.c
+	${GAME_SRCDIR}/Backend/SDL3/*.cpp
+)
+
+list(APPEND GAME_SOURCES ${BACKEND_SOURCES})
 
 # Make source groups match file tree
 source_group(TREE ${GAME_SRCDIR} PREFIX "" FILES ${GAME_SOURCES})
@@ -121,7 +158,10 @@ endif()
 
 add_executable(${GAME_TARGET} ${GAME_SOURCES})
 
-target_include_directories(${GAME_TARGET} PRIVATE ${GAME_SRCDIR}/Headers)
+target_include_directories(${GAME_TARGET} PRIVATE
+	${GAME_SRCDIR}/Headers
+	${GAME_SRCDIR}/Backend
+)
 
 #------------------------------------------------------------------------------
 # COMPILER/LINKER OPTIONS
@@ -135,6 +175,15 @@ target_compile_definitions(${GAME_TARGET} PRIVATE
 	HQ_TERRAIN=1
 	ENABLE_LOADING_SCREEN=0
 	GL_SILENCE_DEPRECATION)
+
+# Windows-specific defines (both MSVC and MinGW)
+if(WIN32)
+	target_compile_definitions(${GAME_TARGET} PRIVATE
+		WIN32_LEAN_AND_MEAN
+		NOGDI				# don't clash with Mac function names
+		NOUSER				# don't clash with Mac function names
+	)
+endif()
 
 if(NOT MSVC)
 	target_compile_options(${GAME_TARGET} PRIVATE
@@ -162,12 +211,6 @@ if(NOT MSVC)
 		)
 	endif()
 else()
-	target_compile_definitions(${GAME_TARGET} PRIVATE
-		WIN32_LEAN_AND_MEAN
-		NOGDI				# don't clash with Mac function names
-		NOUSER				# don't clash with Mac function names
-	)
-
 	target_compile_options(${GAME_TARGET} PRIVATE
 		/EHs	# synchronous exceptions; also, extern "C" functions may throw exceptions
 		/W4
@@ -194,6 +237,11 @@ endif()
 # LINK LIBRARIES
 #------------------------------------------------------------------------------
 
+# MinGW: statically link GCC runtime to avoid DLL dependencies
+if(WIN32 AND NOT MSVC)
+	target_link_options(${GAME_TARGET} PRIVATE -static-libgcc -static-libstdc++ -static)
+endif()
+
 # Link sanitizers first
 if(SANITIZE)
 	target_link_libraries(${GAME_TARGET} PRIVATE asan ubsan)
@@ -211,8 +259,16 @@ else()
 	target_link_libraries(${GAME_TARGET} PRIVATE SDL3::SDL3-static)
 endif()
 
-# Link core dependencies
-target_link_libraries(${GAME_TARGET} PRIVATE Pomme OpenGL::GL)
+# Link OpenGL
+target_link_libraries(${GAME_TARGET} PRIVATE OpenGL::GL)
+
+# Link Pomme
+target_link_libraries(${GAME_TARGET} PRIVATE Pomme)
+
+# Windows socket library for networking
+if(WIN32)
+	target_link_libraries(${GAME_TARGET} PRIVATE ws2_32)
+endif()
 
 # Add required frameworks for KillMacMouseAcceleration
 if(APPLE)
@@ -303,8 +359,8 @@ if(APPLE)
 endif()
 
 # Windows-specific libraries
-if(WIN32)
-	# Copy SDL3 DLLs to output folder on Windows for convenience
+if(WIN32 AND NOT SDL_STATIC)
+	# Copy SDL3 DLLs to output folder on Windows for convenience (only for shared builds)
 	add_custom_command(TARGET ${GAME_TARGET} POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:${GAME_TARGET}> $<TARGET_FILE_DIR:${GAME_TARGET}>)
 
