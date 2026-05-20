@@ -424,6 +424,8 @@ long	oldLeft,oldRight,oldFront,oldBack,oldTop,oldBottom;
 
 
 
+
+
 		/* SUB-DIVIDE DELTA INTO MANAGABLE LENGTHS */
 		//
 		// Do the player motion in multiple passes depending on how fast

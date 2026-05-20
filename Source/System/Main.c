@@ -968,14 +968,21 @@ static void PlayArea(void)
 				/* GET CONTROL INFORMATION FOR THIS FRAME */
 				/******************************************/
 				//
-				// Also gathers frame rate info for the net clients.
+				// ASYNC NETWORKING: Game loop runs at 60 FPS, network at 30 Hz.
+				// Non-blocking receives happen every frame.
+				// Sends happen at fixed network tick rate.
 				//
 
 				/* NETWORK CLIENT */
 
 		if (gIsNetworkClient)
 		{
-			ClientReceive_ControlInfoFromHost();			// read all player's control info back from the Host once he's gathered it all
+			// Non-blocking receive - uses last known state if no new data
+			ClientReceive_ControlInfoFromHost();
+
+			// Read local input every frame for responsive controls
+			ReadKeyboard();
+			GetLocalKeyState();
 		}
 
 				/* HOST OR NON-NET */
@@ -984,14 +991,26 @@ static void PlayArea(void)
 			ReadKeyboard();									// read local keys
 			GetLocalKeyState();								// build a control state bitfield
 
-				/* NETWORK HOST*/
+				/* NETWORK HOST - receive from clients (non-blocking) */
 
 			if (gIsNetworkHost)
 			{
-				HostSend_ControlInfoToClients();			// now send everyone's key states to all clients
+				HostReceive_ControlInfoFromClients();
 			}
 		}
 
+
+				/* APPLY HOST POSITIONS (CLIENT ONLY) */
+				//
+				// For network clients, apply host-authoritative positions BEFORE MoveEverything.
+				// This way UpdatePlayer_Car builds transforms with corrected positions,
+				// and attachments (wheels, head) get positioned correctly.
+				//
+
+		if (gIsNetworkClient)
+		{
+			ClientApplyHostPositions();
+		}
 
 				/****************/
 				/* MOVE OBJECTS */
@@ -1009,28 +1028,28 @@ static void PlayArea(void)
 		DoPlayerTerrainUpdate();
 
 
-
-
-			/****************************/
-			/* SEND NET CLIENT KEY INFO */
-			/****************************/
+			/********************************/
+			/* NETWORK SEND (RATE LIMITED)  */
+			/********************************/
 			//
-			// We can do this anytime AFTER this frame's key control info is no longer needed.
-			// Since this will change the control bits, we MUST BE SURE that the bits are not
-			// used again until the next frame!
-			//
-			// For best performance, we do this before the render function.  That way there is
-			// time for this send to get to the host while we're still waiting for the render to
-			// complete - we essentially get this send for free!
+			// Send network data at fixed tick rate (30 Hz), not every frame.
+			// This reduces network traffic while maintaining smooth gameplay.
 			//
 
 		if (gIsNetworkClient)
 		{
-			ReadKeyboard();									// read local client keys
-			GetLocalKeyState();								// build a control state bitfield
-			ClientSend_ControlInfoToHost();					// send this info to the host to be used the next frame
+			if (NetShouldSendThisFrame())
+			{
+				ClientSend_ControlInfoToHost();
+			}
 		}
-
+		else if (gIsNetworkHost)
+		{
+			if (NetShouldSendThisFrame())
+			{
+				HostSend_ControlInfoToClients();
+			}
+		}
 
 
 			/***************/
@@ -1038,22 +1057,6 @@ static void PlayArea(void)
 			/***************/
 
 		OGL_DrawScene(DrawTerrain);
-
-
-
-
-			/************************************/
-			/* NET HOST RECEIVE CLIENT KEY INFO */
-			/************************************/
-			//
-			// Odds are that the clients have all sent their control into to the Host by now,
-			// so the Host can read all of the client key info for use on the next frame.
-			//
-
-		if (gIsNetworkHost)
-		{
-			HostReceive_ControlInfoFromClients();		// get client info
-		}
 
 
 			/**************/

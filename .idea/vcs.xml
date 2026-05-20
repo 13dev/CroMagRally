@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-mingw/_deps/enet-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-mingw/_deps/sdl3-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-raylib/_deps/enet-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-raylib/_deps/raylib-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-sdl/_deps/gamenetworkingsockets-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-sdl/_deps/gamenetworkingsockets-src/src/external/abseil" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-sdl/_deps/gamenetworkingsockets-src/src/external/picojson" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-sdl/_deps/gamenetworkingsockets-src/src/external/webrtc" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-sdl/_deps/sdl3-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-win64/_deps/enet-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-win64/_deps/sdl3-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/extern/Pomme" vcs="Git" />
+  </component>
+</project>

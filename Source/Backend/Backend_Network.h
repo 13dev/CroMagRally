@@ -26,6 +26,10 @@ extern "C" {
 // Default signaling server (can be overridden)
 #define NET_DEFAULT_SIGNALING_HOST  "cromag-signaling.fly.dev"
 
+// Yojimbo UDP server (used when USE_YOJIMBO is defined)
+#define NET_YOJIMBO_HOST            "cromag-yojimbo.fly.dev"
+#define NET_YOJIMBO_PORT            40000
+
 //==============================================================================
 // CONNECTION STATE
 //==============================================================================

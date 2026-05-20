@@ -1,0 +1,77 @@
+InitNetworkManager: Starting...
+[Net] Network initialized (TCP relay)
+InitNetworkManager: Network initialized successfully (GNS P2P)
+GameMain: Starting main loop iteration
+GameMain: Calling DoMainMenuScreen
+DoMainMenuScreen: Network setup - gIsNetworkHost=0, gIsNetworkClient=1
+DoMainMenuScreen: Calling DoNetworkJoinScreen...
+DoNetworkJoinScreen: Starting join screen
+DoNetworkJoinScreen: Joining room JVSZ
+[Net] State ch[Net] State changed to 1: Connecting to server...
+OnStateChanged: Connecting to server...
+[Net] Connected to relay server cromag-signaling.fly.dev:27015
+[Net] State changed to 2: Creating room...
+OnStateChanged: Creating room...
+SetupNetworkHosting: Registering with signaling server
+[Net] Sent: REGISTER:EEE
+[Net] Server: ROOM:JVSZ
+[Net] State changed to 3: JVSZ
+OnStateChanged: Room Code: JVSZ
+[Net] Server: PLAYER_JOINED:1:23DS
+[Net] Player 1 (23DS) joined (2 total)
+OnPlayerName: Player 1 name set to: 23DS
+OnClientConnected: Player 1 (23DS) joined (total: 2)
+HostSendGameConfig: Starting game with 1/1 P2P connections
+[Net] State changed to 5: Game started, using TCP relay
+OnStateChanged: Connected!
+HostSendGameConfig: Proceeding with 1 connected clients
+[Net] Sent: START
+HostSendGameConfig: Sent config t[Net] Server: GAME_STARTING
+[Net] Game starting signal received
+[Net] State changed to 5: Connected to host via relay
+OnStateChanged: Connected!
+OnClientConnected: Connected to host
+ClientWaitForConfig: Received config - player 1 of 2
+DoNetworkJoinScreen: Got config from host!
+DoNetworkJoinScreen: outcome=1
+DoNetworkJoinScreen: Success! gameMode=2, trackNum=0, playerNum=1
+DoMainMenuScreen: DoNetworkJoinScreen succeeded
+GameMain: DoMainMenuScreen returned, calling PlayGame
+PlayGame: Starting (gGameMode=2, gNetGameInProgress=1, gNumLocalPlayers=1)
+PlayGame: Setting default physics for net game
+PlayGame: Switching on game mode 2
+PlayGame_MultiplayerRace: Starting
+PlayGame_MultiplayerRace: Calling InitPlayerInfo_Game
+PlayGame_MultiplayerRace: InitPlayerInfo_Game done
+PlayGame_MultiplayerRace: Calling DoMultiPlayerVehicleSelections
+DoMultiPlayerVehicleSelections: Starting (gNetGameInProgress=1, gMyNetworkPlayerNum=1)
+DoMultiPlayerVehicleSelections: Calling DoCharacterSelectScreen for player 1
+DoMultiPlayerVehicleSelections: Calling DoVGetVehicleSelectionFromNetPlayers: Player 1 chose vehicle 0
+GetVehicleSelectionFromNetPlayers: Got all vehicle selections!
+DoMultiPlayerVehicleSelections: Done
+PlayGame_MultiplayerRace: DoMultiPlayerVehicleSelections done
+PlayGame_MultiplayerRace: Loading track 0
+PlayGame_MultiplayerRace: Calling InitArea
+[Infobar] MakePlayerNameLabels: gNumTotalPlayers=2, gMyNetworkPlayerNum=0
+[Infobar] Created label for player 1, name='23DS'
+PlayGame_MultiplayerRace: InitArea done, calling PlayArea
+PlayArea: Starting (gIsNetworkHost=1, gIsNetworkClient=0, gNumRealPlayers=2)
+PlayArea: Calling HostWaitForPlayersToPrepareLevel...
+HostWaitForPlayersToPrepareLevel: Waiting for 1 clients (gNumRealPlayers=2)...
+HostWaitForPlayersToPrepareLevel: Still waiting... syncedPlayers=1/2
+HostWaitForPlayersToPrepareLevel: Got sync message! gSyncCount=1
+HostWaitForPlayersToPrepareLevel: All players ready!
+PlayArea: HostWaitForPlayersToPrepareLevel done
+[Net] State changed to 0: Cleaned up
+OnStateChanged: Disconnected
+[Net] Session cleaned up
+EndNetworkGame: Network game ended
+al...
+ClientTellHostLevelIsPrepared: Still waiting for GO signal...
+ClientTellHostLevelIsPrepared: Host says GO!
+PlayArea: ClientTellHostLevelIsPrepared done
+ClientReceive: Clock synced! RTT=68, offset=2987
+[Net] State changed to 0: Cleaned up
+OnStateChanged: Disconnected
+[Net] Session cleaned up
+EndNetworkGame: Network game ended

@@ -1,0 +1,23 @@
+InitNetworkManager: Starting...
+[Net] Network initialized (TCP relay)
+InitNetworkManager: Network initialized successfully (GNS P2P)
+GameMain: Starting main loop iteration
+GameMain: Calling DoMainMenuScreen
+DoMainMenuScreen: Network setup - gIsNetworkHost=1, gIsNetworkClient=0
+DoMainMenuScreen: Calling DoNetworkHostGatherScreen...
+DoNetworkHostGatherScreen: Starting name input phase
+  gPlayerNameInput = '', cursor = 0
+[Net] State changed to 1: Connecting to server...
+OnStateChanged: Connecting to server...
+[Net] Connected to relay server cromag-signaling.fly.dev:27015
+[Net] State changed to 2: Creating room...
+OnStateChanged: Creating room...
+SetupNetworkHosting: Registering with signaling server
+[Net] Sent: REGISTER:LEO
+[Net] Server: ROOM:8RSG
+[Net] State changed to 3: 8RSG
+OnStateChanged: Room Code: 8RSG
+[Net] State changed to 0: Cleaned up
+OnStateChanged: Disconnected
+[Net] Session cleaned up
+EndNetworkGame: Network game ended
