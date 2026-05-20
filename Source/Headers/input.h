@@ -4,6 +4,11 @@
 
 #pragma once
 
+// Rename to avoid Windows API conflicts
+#ifdef _WIN32
+#define GetKeyState CMR_GetKeyState
+#endif
+
 #include "Pomme.h"
 #include "structs.h"
 
