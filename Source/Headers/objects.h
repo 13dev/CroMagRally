@@ -1,6 +1,12 @@
 //
 // Object.h
 //
+
+// Rename to avoid Windows API conflicts
+#ifdef _WIN32
+#define DeleteObject CMR_DeleteObject
+#endif
+
 #include "ogl_support.h"
 
 #define INVALID_NODE_FLAG	0xdeadbeef			// put into CType when node is deleted
