@@ -103,6 +103,12 @@ char* Signaling_HandleMessage(socket_t socket, const char* message)
     if (!gInitialized || !message)
         return FormatResponse(MSG_ERROR, "Server not initialized");
 
+    // Handle HTTP health check requests from load balancers (Render, etc.)
+    if (strncmp(message, "HEAD ", 5) == 0 || strncmp(message, "GET ", 4) == 0)
+    {
+        return AllocString("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\n\r\nOK");
+    }
+
     // Copy message for parsing
     char msgCopy[MAX_MESSAGE_SIZE];
     strncpy(msgCopy, message, sizeof(msgCopy) - 1);
