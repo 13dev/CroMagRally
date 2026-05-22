@@ -379,13 +379,14 @@ if(APPLE)
 	)
 endif()
 
-# Windows-specific libraries
-if(WIN32 AND NOT SDL_STATIC)
-	# Copy SDL3 DLLs to output folder on Windows for convenience (only for shared builds)
+# Windows-specific: copy runtime DLLs to output folder
+if(WIN32)
+	# Copy DLLs using COMMAND_EXPAND_LISTS to properly handle the semicolon-separated list
 	add_custom_command(TARGET ${GAME_TARGET} POST_BUILD
-		COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:${GAME_TARGET}> $<TARGET_FILE_DIR:${GAME_TARGET}>)
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_RUNTIME_DLLS:${GAME_TARGET}>" "$<TARGET_FILE_DIR:${GAME_TARGET}>"
+		COMMAND_EXPAND_LISTS)
 
-	# When installing (cmake --install), copy Visual Studio redistributable DLLs to install location
+	# Visual Studio redistributable DLLs for cmake --install
 	include(InstallRequiredSystemLibraries)
 endif()
 
