@@ -9,7 +9,7 @@ on:
 jobs:
   build-linux-appimage:
     runs-on: ${{ matrix.platform.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -19,6 +19,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+          key: vcpkg-linux-${{ matrix.platform.name }}-gns-${{ hashFiles('.github/workflows/ReleaseBuilds.yml') }}
+          restore-keys: vcpkg-linux-${{ matrix.platform.name }}-gns-
       - name: Get build dependencies from APT
         run: |
           sudo apt update
@@ -46,10 +52,16 @@ jobs:
 
   build-windows:
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+          key: vcpkg-windows-x64-gns-${{ hashFiles('.github/workflows/ReleaseBuilds.yml') }}
+          restore-keys: vcpkg-windows-x64-gns-
       - name: Install GNS via vcpkg
         run: |
           vcpkg install gamenetworkingsockets:x64-windows
@@ -69,11 +81,17 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     continue-on-error: true  # macOS is optional for release
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+          key: vcpkg-macos-arm64-gns-${{ hashFiles('.github/workflows/ReleaseBuilds.yml') }}
+          restore-keys: vcpkg-macos-arm64-gns-
       - name: Install GNS via vcpkg
         run: |
           vcpkg install gamenetworkingsockets
@@ -81,7 +99,7 @@ jobs:
       - name: Get artifact name
         run: echo "ARTIFACT_NAME=$(python3 build.py --print-artifact-name)" >> $GITHUB_ENV
       - run: python3 build.py --dependencies
-      - run: python3 build.py --configure -G Xcode
+      - run: python3 build.py --configure -G Xcode -DCMAKE_OSX_ARCHITECTURES=arm64
       - run: python3 build.py --build
       - run: python3 build.py --package
       - uses: actions/upload-artifact@v4

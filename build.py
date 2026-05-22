@@ -114,7 +114,7 @@ if SYSTEM == "Linux":
     parser.add_argument("--no-appimage", default=False, action="store_true",
         help="don't generate an AppImage in step 4")
 
-args = parser.parse_args()
+args, extra_cmake_args = parser.parse_known_args()
 
 dist_dir = os.path.abspath(args.dist_dir)
 build_dir = os.path.abspath(args.build_dir)
@@ -239,6 +239,9 @@ class Project:
         # Support vcpkg toolchain from environment
         if "CMAKE_TOOLCHAIN_FILE" in os.environ:
             cmake_args.append(f"-DCMAKE_TOOLCHAIN_FILE={os.environ['CMAKE_TOOLCHAIN_FILE']}")
+
+        # Pass through any extra CMake arguments from command line
+        cmake_args += extra_cmake_args
 
         call(cmake_args, env=env)
 
