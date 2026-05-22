@@ -30,7 +30,8 @@ jobs:
             libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev \
             libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev libudev-dev fcitx-libs-dev \
             libpipewire-0.3-dev libwayland-dev libdecor-0-dev liburing-dev \
-            desktop-file-utils
+            desktop-file-utils \
+            libssl-dev libprotobuf-dev protobuf-compiler
       - run: echo "ARTIFACT_NAME=$(python3 build.py --print-artifact-name)" >> $GITHUB_ENV
       - run: python3 build.py --dependencies
       - run: python3 build.py --configure
@@ -48,11 +49,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
+      - name: Install GNS dependencies
+        run: |
+          vcpkg install openssl:x64-windows protobuf:x64-windows
+          echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" >> $env:GITHUB_ENV
       - run: |
           $ARTIFACT_NAME = python3 build.py --print-artifact-name
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $env:GITHUB_ENV
       - run: python3 build.py --dependencies
-      - run: python3 build.py --configure -G 'Visual Studio 17 2022'
+      - run: python3 build.py --configure -G 'Visual Studio 17 2022' -- "-DCMAKE_TOOLCHAIN_FILE=$env:CMAKE_TOOLCHAIN_FILE"
       - run: python3 build.py --build
       - run: python3 build.py --package
       - uses: actions/upload-artifact@v4
@@ -67,10 +72,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
+      - name: Install GNS dependencies
+        run: |
+          brew install openssl@3 protobuf
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
       - name: Get artifact name
         run: echo "ARTIFACT_NAME=$(python3 build.py --print-artifact-name)" >> $GITHUB_ENV
       - run: python3 build.py --dependencies
-      - run: python3 build.py --configure
+      - run: python3 build.py --configure -- -DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR
       - run: python3 build.py --build
       - run: python3 build.py --package
       - uses: actions/upload-artifact@v4
