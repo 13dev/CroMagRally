@@ -22,6 +22,7 @@ project(${GAME_TARGET}
 option(BUILD_SDL_FROM_SOURCE "Build SDL from source" OFF)
 option(SDL_STATIC "Static link SDL" OFF)
 option(SANITIZE "Build with asan/ubsan" OFF)
+option(USE_GNS "Use GameNetworkingSockets for UDP networking" ON)
 
 if(WIN32 OR APPLE)
 	# Don't warn
@@ -119,6 +120,31 @@ add_subdirectory(extern/Pomme)
 find_package(OpenGL REQUIRED)
 
 #------------------------------------------------------------------------------
+# GAMENETWORKINGSOCKETS (via FetchContent)
+#------------------------------------------------------------------------------
+
+if(USE_GNS)
+	message(STATUS "GameNetworkingSockets networking enabled (FetchContent)")
+
+	include(FetchContent)
+	FetchContent_Declare(
+		GameNetworkingSockets
+		URL https://github.com/ValveSoftware/GameNetworkingSockets/archive/refs/tags/v1.4.1.tar.gz
+	)
+
+	set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+	set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+	set(BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+
+	# Save and restore BUILD_SHARED_LIBS so it only affects GNS
+	set(_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+	set(BUILD_SHARED_LIBS ON)
+	FetchContent_MakeAvailable(GameNetworkingSockets)
+	set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS})
+else()
+	message(FATAL_ERROR "USE_GNS must be enabled - no other networking backends available")
+endif()
+
 # EXECUTABLE TARGET
 #------------------------------------------------------------------------------
 
@@ -135,6 +161,10 @@ file(GLOB_RECURSE GAME_SOURCES CONFIGURE_DEPENDS
 # Remove backend-specific sources from the main glob
 list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend/SDL3/.*")
 list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend/Raylib/.*")
+
+# Remove legacy backends (only GNS is used now)
+list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend_Yojimbo\\.cpp")
+list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend_Network\\.cpp")
 
 # Add SDL3 backend sources
 file(GLOB BACKEND_SOURCES CONFIGURE_DEPENDS
@@ -161,6 +191,7 @@ add_executable(${GAME_TARGET} ${GAME_SOURCES})
 target_include_directories(${GAME_TARGET} PRIVATE
 	${GAME_SRCDIR}/Headers
 	${GAME_SRCDIR}/Backend
+	${CMAKE_SOURCE_DIR}
 )
 
 #------------------------------------------------------------------------------
@@ -174,7 +205,8 @@ add_compile_definitions(
 target_compile_definitions(${GAME_TARGET} PRIVATE
 	HQ_TERRAIN=1
 	ENABLE_LOADING_SCREEN=0
-	GL_SILENCE_DEPRECATION)
+	GL_SILENCE_DEPRECATION
+	USE_GNS=1)
 
 # Windows-specific defines (both MSVC and MinGW)
 if(WIN32)
@@ -274,6 +306,11 @@ endif()
 if(APPLE)
 	target_link_libraries(${GAME_TARGET} PRIVATE "-framework Foundation" "-framework IOKit")
 endif()
+
+# Link GameNetworkingSockets
+target_link_libraries(${GAME_TARGET} PRIVATE GameNetworkingSockets)
+target_include_directories(${GAME_TARGET} PRIVATE ${gamenetworkingsockets_SOURCE_DIR}/include)
+
 
 #------------------------------------------------------------------------------
 # PLATFORM-SPECIFIC PROPERTIES

@@ -968,30 +968,33 @@ static void PlayArea(void)
 				/* GET CONTROL INFORMATION FOR THIS FRAME */
 				/******************************************/
 				//
-				// Also gathers frame rate info for the net clients.
+				// EQUAL-PLAYERS NETWORKING MODEL
+				// All players send their own position to server.
+				// Server broadcasts all positions to everyone.
+				// No host advantage - everyone is equal.
 				//
 
-				/* NETWORK CLIENT */
+		ReadKeyboard();									// read local keys
+		GetLocalKeyState();								// build a control state bitfield
 
-		if (gIsNetworkClient)
+		if (gNetGameInProgress)
 		{
-			ClientReceive_ControlInfoFromHost();			// read all player's control info back from the Host once he's gathered it all
+			// Process network events and send local state at fixed rate
+			NetTick_EqualPlayers();
 		}
 
-				/* HOST OR NON-NET */
-		else
+
+				/* APPLY WORLD STATE (ALL PLAYERS) */
+				//
+				// Equal-players model: Apply server-broadcast positions BEFORE MoveEverything.
+				// All players receive the same world state from the server.
+				// Local player trusts own physics; remote players lerp to server positions.
+				//
+
+		if (gNetGameInProgress)
 		{
-			ReadKeyboard();									// read local keys
-			GetLocalKeyState();								// build a control state bitfield
-
-				/* NETWORK HOST*/
-
-			if (gIsNetworkHost)
-			{
-				HostSend_ControlInfoToClients();			// now send everyone's key states to all clients
-			}
+			ApplyWorldState();
 		}
-
 
 				/****************/
 				/* MOVE OBJECTS */
@@ -1009,28 +1012,7 @@ static void PlayArea(void)
 		DoPlayerTerrainUpdate();
 
 
-
-
-			/****************************/
-			/* SEND NET CLIENT KEY INFO */
-			/****************************/
-			//
-			// We can do this anytime AFTER this frame's key control info is no longer needed.
-			// Since this will change the control bits, we MUST BE SURE that the bits are not
-			// used again until the next frame!
-			//
-			// For best performance, we do this before the render function.  That way there is
-			// time for this send to get to the host while we're still waiting for the render to
-			// complete - we essentially get this send for free!
-			//
-
-		if (gIsNetworkClient)
-		{
-			ReadKeyboard();									// read local client keys
-			GetLocalKeyState();								// build a control state bitfield
-			ClientSend_ControlInfoToHost();					// send this info to the host to be used the next frame
-		}
-
+			// NOTE: Network send is handled by NetTick_EqualPlayers() above
 
 
 			/***************/
@@ -1038,22 +1020,6 @@ static void PlayArea(void)
 			/***************/
 
 		OGL_DrawScene(DrawTerrain);
-
-
-
-
-			/************************************/
-			/* NET HOST RECEIVE CLIENT KEY INFO */
-			/************************************/
-			//
-			// Odds are that the clients have all sent their control into to the Host by now,
-			// so the Host can read all of the client key info for use on the next frame.
-			//
-
-		if (gIsNetworkHost)
-		{
-			HostReceive_ControlInfoFromClients();		// get client info
-		}
 
 
 			/**************/
@@ -1094,6 +1060,15 @@ static void PlayArea(void)
 			gHideInfobar = !gHideInfobar;
 		}
 
+		// F9 - Toggle network diagnostics recording
+		if (GetNewKeyState(SDL_SCANCODE_F9) && gIsNetworkClient)
+		{
+			if (Net_IsDiagnosticsEnabled())
+				Net_StopDiagnostics();
+			else
+				Net_StartDiagnostics();
+		}
+
 
 			/* SEE IF PAUSED */
 
@@ -1103,8 +1078,8 @@ static void PlayArea(void)
 				DoPaused();
 		}
 
-		if (!gIsNetworkClient)						// clients dont need to calc frame rate since its passed to them from host.
-			CalcFramesPerSecond();
+		// Equal-players model: ALL players calculate their own frame rate
+		CalcFramesPerSecond();
 
 		gGameFrameNum++;
 

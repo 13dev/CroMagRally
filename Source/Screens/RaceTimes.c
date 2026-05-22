@@ -64,6 +64,13 @@ void TickLapTimes(int playerNum)
 		return;
 	}
 
+	// Network clients receive ALL lap times from host (including their own)
+	// Only the host ticks lap times locally (authoritative)
+	if (gIsNetworkClient)
+	{
+		return;
+	}
+
 	PlayerInfoType* pi = &gPlayerInfo[playerNum];
 
 	int lap = GAME_MAX(0, pi->lapNum);		// lap number is negative before we cross finish line at start of race

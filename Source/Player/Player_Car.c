@@ -256,6 +256,9 @@ static const float shadowScale[NUM_LAND_CAR_TYPES] =
 
 	gPlayerInfo[playerNum].objNode 	= newObj;
 
+	printf("[CAR] InitPlayer_Car: P%d MoveCall=%p StatusBits=0x%x\n",
+		   playerNum, (void*)newObj->MoveCall, newObj->StatusBits);
+
 	newObj->Rot.y = rotY;
 
 
@@ -410,6 +413,13 @@ int					numPasses;
 float				oldFPS,oldFPSFrac;
 long	oldLeft,oldRight,oldFront,oldBack,oldTop,oldBottom;
 
+	// Debug: log which player's car is being moved (limit spam)
+	static int sMoveCarLogCount = 0;
+	if (sMoveCarLogCount++ < 60)
+	{
+		printf("[CAR] MovePlayer_Car: P%d pos=(%.0f,%.0f,%.0f)\n",
+			   theNode->PlayerNum, theNode->Coord.x, theNode->Coord.y, theNode->Coord.z);
+	}
 
 		/* KEEP TRACK OF LAP TIMES */
 
@@ -421,6 +431,8 @@ long	oldLeft,oldRight,oldFront,oldBack,oldTop,oldBottom;
 
 	gCurrentPlayerNum = theNode->PlayerNum;			// get player #
 	gCurrentPlayer = theNode;
+
+
 
 
 
@@ -871,9 +883,22 @@ Boolean		onWater;
 			/* MOVE THE CAR */
 			/****************/
 
+	// Debug: Log position update
+	static int sMoveLogCount = 0;
+	if (sMoveLogCount++ < 60 && playerNum == gMyNetworkPlayerNum)
+	{
+		printf("[MOTION] P%d BEFORE: gCoord.y=%.1f, gDelta.y=%.1f, fps=%.4f\n",
+			   playerNum, gCoord.y, gDelta.y, fps);
+	}
+
 	gCoord.x += gDelta.x * fps;									// move it
 	gCoord.y += gDelta.y * fps;
 	gCoord.z += gDelta.z * fps;
+
+	if (sMoveLogCount < 61 && playerNum == gMyNetworkPlayerNum)
+	{
+		printf("[MOTION] P%d AFTER: gCoord.y=%.1f\n", playerNum, gCoord.y);
+	}
 
 
 

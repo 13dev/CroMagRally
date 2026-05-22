@@ -1,0 +1,130 @@
+name: Auto Version & Tag
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  version-and-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest tag
+        id: latest_tag
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
+
+      - name: Parse current version
+        id: current
+        run: |
+          VERSION="${{ steps.latest_tag.outputs.tag }}"
+          VERSION="${VERSION#v}"  # Remove 'v' prefix
+
+          MAJOR=$(echo $VERSION | cut -d. -f1)
+          MINOR=$(echo $VERSION | cut -d. -f2)
+          PATCH=$(echo $VERSION | cut -d. -f3)
+
+          echo "major=$MAJOR" >> $GITHUB_OUTPUT
+          echo "minor=$MINOR" >> $GITHUB_OUTPUT
+          echo "patch=$PATCH" >> $GITHUB_OUTPUT
+          echo "Current version: $MAJOR.$MINOR.$PATCH"
+
+      - name: Analyze commits for version bump
+        id: bump
+        run: |
+          LATEST_TAG="${{ steps.latest_tag.outputs.tag }}"
+
+          # Get commits since last tag (or all commits if no tag)
+          if [ "$LATEST_TAG" = "v0.0.0" ]; then
+            COMMITS=$(git log --pretty=format:"%s" HEAD)
+          else
+            COMMITS=$(git log --pretty=format:"%s" ${LATEST_TAG}..HEAD)
+          fi
+
+          echo "Commits since $LATEST_TAG:"
+          echo "$COMMITS"
+
+          # Check for breaking changes (major bump)
+          if echo "$COMMITS" | grep -qiE "^.*!:|BREAKING CHANGE"; then
+            echo "type=major" >> $GITHUB_OUTPUT
+            echo "Detected: MAJOR bump (breaking change)"
+          # Check for features (minor bump)
+          elif echo "$COMMITS" | grep -qiE "^feat(\(.*\))?:"; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+            echo "Detected: MINOR bump (new feature)"
+          # Default to patch bump for fixes, chores, etc.
+          elif echo "$COMMITS" | grep -qiE "^(fix|chore|docs|style|refactor|perf|test|build|ci)(\(.*\))?:"; then
+            echo "type=patch" >> $GITHUB_OUTPUT
+            echo "Detected: PATCH bump"
+          else
+            # Any other commit also triggers patch bump
+            if [ -n "$COMMITS" ]; then
+              echo "type=patch" >> $GITHUB_OUTPUT
+              echo "Detected: PATCH bump (default)"
+            else
+              echo "type=none" >> $GITHUB_OUTPUT
+              echo "No new commits since last tag"
+            fi
+          fi
+
+      - name: Calculate new version
+        id: new_version
+        if: steps.bump.outputs.type != 'none'
+        run: |
+          MAJOR=${{ steps.current.outputs.major }}
+          MINOR=${{ steps.current.outputs.minor }}
+          PATCH=${{ steps.current.outputs.patch }}
+          BUMP_TYPE=${{ steps.bump.outputs.type }}
+
+          case $BUMP_TYPE in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Update CMakeLists.txt
+        if: steps.bump.outputs.type != 'none'
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          sed -i "s/set(GAME_VERSION[[:space:]]*\"[^\"]*\")/set(GAME_VERSION\t\t\t\"${NEW_VERSION}\")/" CMakeLists.txt
+          echo "Updated CMakeLists.txt to version $NEW_VERSION"
+          grep GAME_VERSION CMakeLists.txt
+
+      - name: Commit and tag
+        if: steps.bump.outputs.type != 'none'
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add CMakeLists.txt
+          git commit -m "chore: bump version to ${NEW_VERSION} [skip ci]"
+          git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
+
+          git push origin master
+          git push origin "v${NEW_VERSION}"
+
+          echo "Created and pushed tag v${NEW_VERSION}"
