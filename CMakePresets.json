@@ -11,6 +11,7 @@
       "hidden": true,
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/${presetName}",
+      "toolchainFile": "$env{HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "BUILD_SDL_FROM_SOURCE": "ON"

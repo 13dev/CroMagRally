@@ -610,21 +610,16 @@ void Net_SendConfig(int peerIndex, int gameMode, int age, int trackNum,
     (void)peerIndex;
     if (gConnection == k_HSteamNetConnection_Invalid) return;
 
-    struct __attribute__((packed)) {
-        uint8_t type;
-        int32_t gameMode, age, trackNum, playerNum, numPlayers;
-        int16_t numAgesCompleted, difficulty, tagDuration;
-    } msg;
-
+    NetConfigMsg msg;
     msg.type = (uint8_t)MsgType::CONFIG;
-    msg.gameMode = gameMode;
+    msg.game_mode = gameMode;
     msg.age = age;
-    msg.trackNum = trackNum;
-    msg.playerNum = playerNum;
-    msg.numPlayers = numPlayers;
-    msg.numAgesCompleted = (int16_t)numAgesCompleted;
+    msg.track_num = trackNum;
+    msg.player_num = playerNum;
+    msg.num_players = numPlayers;
+    msg.num_ages_completed = (int16_t)numAgesCompleted;
     msg.difficulty = (int16_t)difficulty;
-    msg.tagDuration = (int16_t)tagDuration;
+    msg.tag_duration = (int16_t)tagDuration;
 
     gInterface->SendMessageToConnection(gConnection, &msg, sizeof(msg),
         k_nSteamNetworkingSend_Reliable, nullptr);
@@ -636,13 +631,9 @@ void Net_SendSync(int playerNum)
 {
     if (gConnection == k_HSteamNetConnection_Invalid) return;
 
-    struct __attribute__((packed)) {
-        uint8_t type;
-        int32_t playerNum;
-    } msg;
-
+    NetSyncMsg msg;
     msg.type = (uint8_t)MsgType::SYNC;
-    msg.playerNum = playerNum;
+    msg.player_num = playerNum;
 
     gInterface->SendMessageToConnection(gConnection, &msg, sizeof(msg),
         k_nSteamNetworkingSend_Reliable, nullptr);
@@ -680,14 +671,10 @@ void Net_SendVehicleType(int playerNum, int vehicleType, int sex)
 {
     if (gConnection == k_HSteamNetConnection_Invalid) return;
 
-    struct __attribute__((packed)) {
-        uint8_t type;
-        int16_t playerNum, vehicleType, sex;
-    } msg;
-
+    NetVehicleTypeMsg msg;
     msg.type = (uint8_t)MsgType::VEHICLE_TYPE;
-    msg.playerNum = (int16_t)playerNum;
-    msg.vehicleType = (int16_t)vehicleType;
+    msg.player_num = (int16_t)playerNum;
+    msg.vehicle_type = (int16_t)vehicleType;
     msg.sex = (int16_t)sex;
 
     gInterface->SendMessageToConnection(gConnection, &msg, sizeof(msg),

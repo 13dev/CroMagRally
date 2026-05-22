@@ -1397,7 +1397,7 @@ void GetVehicleSelectionFromNetPlayers(void)
 
     OGLSetupInputType viewDef;
     OGL_NewViewDef(&viewDef);
-    viewDef.view.clearColor = (OGLColorRGBA) { 0, 0, 0, 1 };
+    viewDef.view.clearColor = OGLColorRGBA{ 0, 0, 0, 1 };
     viewDef.styles.useFog = false;
     viewDef.view.pillarboxRatio = PILLARBOX_RATIO_4_3;
     viewDef.view.fontName = "rockfont";
@@ -1411,13 +1411,13 @@ void GetVehicleSelectionFromNetPlayers(void)
         .scale = 0.4f,
     };
     ObjNode* waitText = TextMesh_New(Localize(STR_WAITING_FOR_PLAYERS), kTextMeshAlignCenter, &textDef);
-    waitText->ColorFilter = (OGLColorRGBA) {1, 1, 1, 1};
+    waitText->ColorFilter = OGLColorRGBA{1, 1, 1, 1};
 
     // Create status text (shows count)
     textDef.coord.y = -20;
     textDef.scale = 0.25f;
     ObjNode* statusText = TextMesh_New("", kTextMeshAlignCenter, &textDef);
-    statusText->ColorFilter = (OGLColorRGBA) {0.7f, 0.7f, 0.7f, 1};
+    statusText->ColorFilter = OGLColorRGBA{0.7f, 0.7f, 0.7f, 1};
 
     MakeFadeEvent(true);
 
