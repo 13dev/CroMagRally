@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 set(GAME_TARGET				"CroMagRally")
 set(GAME_FULL_NAME			"Cro-Mag Rally")
-set(GAME_VERSION			"1.6.1")
+set(GAME_VERSION			"1.6.2")
 set(GAME_IDENTIFIER			"io.jor.cromagrally")
 set(GAME_COPYRIGHT			"© 2000 Pangea Software, Inc., © 2025 Iliyas Jorio.")
 
