@@ -316,6 +316,17 @@ class WindowsProject(Project):
         for dll in windows_dlls:
             shutil.copy(f"{cache_dir}/install/bin/{dll}", appdir)
 
+        # Copy GameNetworkingSockets and its dependencies from vcpkg (if available)
+        vcpkg_root = os.environ.get("VCPKG_INSTALLATION_ROOT", "")
+        if vcpkg_root:
+            vcpkg_bin_dir = f"{vcpkg_root}/installed/x64-windows/bin"
+            # GNS and its dependencies: protobuf, OpenSSL
+            gns_dlls = ["GameNetworkingSockets.dll", "libprotobuf*.dll", "libcrypto*.dll", "libssl*.dll"]
+            for dll_pattern in gns_dlls:
+                for file in glob.glob(f"{vcpkg_bin_dir}/{dll_pattern}"):
+                    shutil.copy(file, appdir)
+                    print(f"Copied DLL: {file}")
+
         self.copy_documentation(appdir)
 
         rm_if_exists(self.get_artifact_path())
@@ -357,6 +368,20 @@ class MacProject(Project):
 
         # Human-friendly name for .app
         os.rename(f"{appdir}/{game_name}.app", f"{appdir}/{game_name_human}.app")
+
+        # Copy GameNetworkingSockets and its dependencies from vcpkg (if available)
+        vcpkg_root = os.environ.get("VCPKG_INSTALLATION_ROOT", "")
+        if vcpkg_root:
+            triplet = "arm64-osx" if MACHINE == "arm64" else "x64-osx"
+            vcpkg_lib_dir = f"{vcpkg_root}/installed/{triplet}/lib"
+            frameworks_dir = f"{appdir}/{game_name_human}.app/Contents/Frameworks"
+            os.makedirs(frameworks_dir, exist_ok=True)
+            # GNS and its dependencies: protobuf, OpenSSL
+            gns_libs = ["libGameNetworkingSockets.dylib", "libprotobuf*.dylib", "libcrypto*.dylib", "libssl*.dylib"]
+            for lib_pattern in gns_libs:
+                for file in glob.glob(f"{vcpkg_lib_dir}/{lib_pattern}"):
+                    shutil.copy(file, frameworks_dir, follow_symlinks=False)
+                    print(f"Copied dylib: {file}")
 
         self.copy_documentation(appdir)
 
@@ -441,6 +466,18 @@ class LinuxProject(Project):
         if not self.use_system_sdl:
             for file in glob.glob(f"{libs_dir}/SDL3-{sdl_ver}/install/lib/libSDL3*.so*"):
                 shutil.copy(file, f"{appdir}/usr/lib", follow_symlinks=False)
+
+        # Copy GameNetworkingSockets and its dependencies from vcpkg (if available)
+        vcpkg_root = os.environ.get("VCPKG_INSTALLATION_ROOT", "")
+        if vcpkg_root:
+            triplet = "arm64-linux" if MACHINE == "aarch64" else "x64-linux"
+            vcpkg_lib_dir = f"{vcpkg_root}/installed/{triplet}/lib"
+            # GNS and its dependencies: protobuf, OpenSSL
+            gns_libs = ["libGameNetworkingSockets.so*", "libprotobuf*.so*", "libcrypto.so*", "libssl.so*"]
+            for lib_pattern in gns_libs:
+                for file in glob.glob(f"{vcpkg_lib_dir}/{lib_pattern}"):
+                    shutil.copy(file, f"{appdir}/usr/lib", follow_symlinks=False)
+                    print(f"Copied library: {file}")
 
         # Invoke appimagetool
         if self.as_appimage:
