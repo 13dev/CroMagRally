@@ -128,3 +128,15 @@ jobs:
           git push origin "v${NEW_VERSION}"
 
           echo "Created and pushed tag v${NEW_VERSION}"
+
+      - name: Trigger Release Builds
+        if: steps.bump.outputs.type != 'none'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ReleaseBuilds.yml',
+              ref: 'v${{ steps.new_version.outputs.version }}'
+            })
