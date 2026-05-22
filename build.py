@@ -151,13 +151,15 @@ def hash_file(path):
             hasher.update(chunk)
     return hasher.hexdigest()
 
-def get_package(url):
+def get_package(url, skip_hash_check=False):
     name = url[url.rfind('/')+1:]
 
-    if name in lib_hashes:
-        reference_hash = lib_hashes[name]
-    else:
-        die(f"Build script lacks reference checksum for {name}")
+    reference_hash = None
+    if not skip_hash_check:
+        if name in lib_hashes:
+            reference_hash = lib_hashes[name]
+        else:
+            die(f"Build script lacks reference checksum for {name}")
 
     path = os.path.normpath(f"{cache_dir}/{name}")
     if os.path.exists(path):
@@ -167,9 +169,10 @@ def get_package(url):
         os.makedirs(cache_dir, exist_ok=True)
         urllib.request.urlretrieve(url, path)
 
-    actual_hash = hash_file(path)
-    if reference_hash != actual_hash:
-        die(f"Bad checksum for {name}: expected {reference_hash}, got {actual_hash}")
+    if reference_hash and reference_hash != "":
+        actual_hash = hash_file(path)
+        if reference_hash != actual_hash:
+            die(f"Bad checksum for {name}: expected {reference_hash}, got {actual_hash}")
 
     return path
 
@@ -231,7 +234,13 @@ class Project:
             env = os.environ.copy()
             env.update(self.gen_env)
 
-        call(["cmake", "-S", ".", "-B", self.dir_name] + self.gen_args, env=env)
+        cmake_args = ["cmake", "-S", ".", "-B", self.dir_name] + self.gen_args
+
+        # Support vcpkg toolchain from environment
+        if "CMAKE_TOOLCHAIN_FILE" in os.environ:
+            cmake_args.append(f"-DCMAKE_TOOLCHAIN_FILE={os.environ['CMAKE_TOOLCHAIN_FILE']}")
+
+        call(cmake_args, env=env)
 
     def build(self):
         build_command = ["cmake", "--build", self.dir_name]
@@ -279,8 +288,8 @@ class WindowsProject(Project):
         return f"{game_name}-{game_ver}-windows-x64.zip"
 
     def prepare_dependencies(self):
+        # SDL3
         rmtree_if_exists(f"{libs_dir}/SDL3")
-
         sdl_zip_path = get_package(f"https://libsdl.org/release/SDL3-devel-{sdl_ver}-VC.zip")
         shutil.unpack_archive(sdl_zip_path, libs_dir)
         shutil.move(f"{libs_dir}/SDL3-{sdl_ver}", f"{libs_dir}/SDL3")
@@ -320,6 +329,7 @@ class MacProject(Project):
         return f"{game_name}-{game_ver}-mac.dmg"
 
     def prepare_dependencies(self):
+        # SDL3
         sdl3_framework = "SDL3.xcframework/macos-arm64_x86_64/SDL3.framework"
         sdl3_framework_target_path = f"{libs_dir}/SDL3.framework"
 
@@ -381,21 +391,20 @@ class LinuxProject(Project):
         return f"{game_name}-{game_ver}-linux-{MACHINE}{extension}"
 
     def prepare_dependencies(self):
-        if self.use_system_sdl:
-            return
+        # SDL3
+        if not self.use_system_sdl:
+            sdl_source_dir = f"{libs_dir}/SDL3-{sdl_ver}"
+            sdl_build_dir = f"{sdl_source_dir}/build"
+            sdl_prefix_dir = f"{sdl_source_dir}/install"
+            rmtree_if_exists(sdl_source_dir)
 
-        sdl_source_dir = f"{libs_dir}/SDL3-{sdl_ver}"
-        sdl_build_dir = f"{sdl_source_dir}/build"
-        sdl_prefix_dir = f"{sdl_source_dir}/install"
-        rmtree_if_exists(sdl_source_dir)
+            sdl_zip_path = get_package(f"https://libsdl.org/release/SDL3-{sdl_ver}.tar.gz")
+            shutil.unpack_archive(sdl_zip_path, libs_dir)
 
-        sdl_zip_path = get_package(f"https://libsdl.org/release/SDL3-{sdl_ver}.tar.gz")
-        shutil.unpack_archive(sdl_zip_path, libs_dir)
-
-        with chdir(sdl_source_dir):
-            call(["cmake", "-S", ".", "-B", "build", f"-DCMAKE_INSTALL_PREFIX={sdl_prefix_dir}"])
-            call(["cmake", "--build", sdl_build_dir, "-j", str(NPROC)])
-            call(["cmake", "--install", sdl_build_dir])
+            with chdir(sdl_source_dir):
+                call(["cmake", "-S", ".", "-B", "build", f"-DCMAKE_INSTALL_PREFIX={sdl_prefix_dir}"])
+                call(["cmake", "--build", sdl_build_dir, "-j", str(NPROC)])
+                call(["cmake", "--install", sdl_build_dir])
 
     def package(self):
         if self.as_appimage:

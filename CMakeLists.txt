@@ -120,27 +120,12 @@ add_subdirectory(extern/Pomme)
 find_package(OpenGL REQUIRED)
 
 #------------------------------------------------------------------------------
-# GAMENETWORKINGSOCKETS (via FetchContent)
+# GAMENETWORKINGSOCKETS (via vcpkg or system)
 #------------------------------------------------------------------------------
 
 if(USE_GNS)
-	message(STATUS "GameNetworkingSockets networking enabled (FetchContent)")
-
-	include(FetchContent)
-	FetchContent_Declare(
-		GameNetworkingSockets
-		URL https://github.com/ValveSoftware/GameNetworkingSockets/archive/refs/tags/v1.4.1.tar.gz
-	)
-
-	set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-	set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
-	set(BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-
-	# Save and restore BUILD_SHARED_LIBS so it only affects GNS
-	set(_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
-	set(BUILD_SHARED_LIBS ON)
-	FetchContent_MakeAvailable(GameNetworkingSockets)
-	set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS})
+	find_package(GameNetworkingSockets CONFIG REQUIRED)
+	message(STATUS "Found GameNetworkingSockets")
 else()
 	message(FATAL_ERROR "USE_GNS must be enabled - no other networking backends available")
 endif()
@@ -308,8 +293,7 @@ if(APPLE)
 endif()
 
 # Link GameNetworkingSockets
-target_link_libraries(${GAME_TARGET} PRIVATE GameNetworkingSockets)
-target_include_directories(${GAME_TARGET} PRIVATE ${gamenetworkingsockets_SOURCE_DIR}/include)
+target_link_libraries(${GAME_TARGET} PRIVATE GameNetworkingSockets::GameNetworkingSockets)
 
 
 #------------------------------------------------------------------------------

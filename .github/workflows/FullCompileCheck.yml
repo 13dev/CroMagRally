@@ -6,7 +6,7 @@ jobs:
   full-compile-check:
     name: ${{ matrix.platform.name }}
     runs-on: ${{ matrix.platform.os }}
-    timeout-minutes: 5
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
@@ -26,5 +26,15 @@ jobs:
 
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
-          
+
+      - name: Install GNS via vcpkg
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            vcpkg install gamenetworkingsockets:x64-windows
+          else
+            vcpkg install gamenetworkingsockets
+          fi
+          echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $GITHUB_ENV
+
       - run: ${{matrix.platform.prefix}} python3 build.py --dependencies --configure --build ${{matrix.platform.extraflags}}
