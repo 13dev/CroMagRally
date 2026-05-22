@@ -1,0 +1,31 @@
+# Build directories
+out/
+build/
+server/out/
+server/build/
+
+# Git
+.git/
+.gitignore
+
+# IDE/tools
+.claude/
+.idea/
+.vscode/
+*.code-workspace
+
+# Game assets (not needed for server)
+Data/
+
+# Source code not needed for server
+Source/
+extern/
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Logs
+*.log

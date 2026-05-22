@@ -19,9 +19,7 @@ enum
 #define NET_TICK_RATE           60          // Network updates per second (60 Hz for smooth sync)
 #define NET_SEND_INTERVAL_MS    (1000 / NET_TICK_RATE)
 
-// Snapshot interpolation constants
-#define SNAPSHOT_BUFFER_SIZE    4           // Number of snapshots to buffer for interpolation
-#define RENDER_DELAY_MS         16          // Render delay behind host time (one 60Hz frame)
+// Simple smoothing constant (no snapshot interpolation)
 
 
 enum
@@ -31,7 +29,11 @@ enum
     kNetHostControlInfoMessage,
     kNetClientControlInfoMessage,
     kNetPlayerCharTypeMessage,
-    kNetNullPacket
+    kNetNullPacket,
+
+    // New equal-players model messages
+    kNetPlayerStateMessage,             // Each player sends own state to server
+    kNetWorldStateMessage               // Server broadcasts all player states
 };
 
 
@@ -39,25 +41,28 @@ enum
         /* MESSAGE DATA STRUCTURES */
         /***************************/
 
+// Pack network message structs to match wire protocol exactly
+#pragma pack(push, 1)
+
         /* GAME CONFIGURATION MESSAGE */
 
 typedef struct
 {
-    int                 gameMode;                           // game mode (tag, race, etc.)
-    int                 age;                                // which age to play for race mode
-    int                 trackNum;                           // which track to play for battle modes
-    long                playerNum;                          // this player's index
-    long                numPlayers;                         // # players in net game
-    short               numAgesCompleted;                   // pass saved game value to clients so we're all the same here
-    short               difficulty;                         // pass host's difficulty setting so we're in sync
-    short               tagDuration;                        // # minutes in tag game
+    int32_t             gameMode;                           // game mode (tag, race, etc.)
+    int32_t             age;                                // which age to play for race mode
+    int32_t             trackNum;                           // which track to play for battle modes
+    int32_t             playerNum;                          // this player's index
+    int32_t             numPlayers;                         // # players in net game
+    int16_t             numAgesCompleted;                   // pass saved game value to clients so we're all the same here
+    int16_t             difficulty;                         // pass host's difficulty setting so we're in sync
+    int16_t             tagDuration;                        // # minutes in tag game
 }NetConfigMessageType;
 
         /* SYNC MESSAGE */
 
 typedef struct
 {
-    long                playerNum;                          // this player's index
+    int32_t             playerNum;                          // this player's index
 }NetSyncMessageType;
 
 
@@ -112,14 +117,55 @@ typedef struct
 
 typedef struct
 {
-    short               playerNum;
-    short               vehicleType;
-    short               sex;                                // 0 = male, 1 = female
+    int16_t             playerNum;
+    int16_t             vehicleType;
+    int16_t             sex;                                // 0 = male, 1 = female
 }NetPlayerCharTypeMessage;
+
+
+        /*========================================*/
+        /* EQUAL PLAYERS MODEL MESSAGES          */
+        /* Server collects states, broadcasts all */
+        /*========================================*/
+
+        /* PLAYER STATE MESSAGE */
+        /* Each player sends their own state to server */
+
+typedef struct
+{
+    int8_t              playerNum;
+    uint32_t            frameCounter;
+    uint32_t            controlBits;
+    uint32_t            controlBitsNew;
+    float               analogSteeringX;
+    float               analogSteeringY;
+    float               posX, posY, posZ;
+    float               rotY;                               // Car facing direction
+    float               velX, velY, velZ;
+    float               steering;
+    int8_t              lapNum;
+    float               currentLapTime;
+}NetPlayerStateMessage;  // ~58 bytes
+
+        /* WORLD STATE MESSAGE */
+        /* Server broadcasts all player states to everyone */
+
+typedef struct
+{
+    uint32_t            serverTimeMs;
+    uint8_t             playerCount;
+    NetPlayerStateMessage players[MAX_PLAYERS];
+}NetWorldStateMessage;
+
+#pragma pack(pop)
 
 
 
 //===============================================================================
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Lifecycle
 void InitNetworkManager(void);
@@ -147,11 +193,7 @@ Boolean ClientWaitForConfig(void);
 void ClientTellHostLevelIsPrepared(void);
 void HostWaitForPlayersToPrepareLevel(void);
 
-// Frame sync
-void HostSend_ControlInfoToClients(void);
-void ClientSend_ControlInfoToHost(void);
-void ClientReceive_ControlInfoFromHost(void);
-void HostReceive_ControlInfoFromClients(void);
+// Frame sync (legacy - kept for reference, use NetTick_EqualPlayers instead)
 
 // Vehicle selection
 void PlayerBroadcastVehicleType(void);
@@ -162,8 +204,31 @@ void PlayerBroadcastNullPacket(void);
 void NetProcessEvents(void);
 void SetLocalPlayerName(const char* name);
 
-// Async networking
-void NetTick_Host(void);        // Non-blocking: send if pending, receive available data
-void NetTick_Client(void);      // Non-blocking: send if pending, receive available data
+// Equal-players networking model
+void NetTick_EqualPlayers(void);        // All players use this - send own state, receive world state
+void SendPlayerState(void);             // Send local player's position/input to server
+void ApplyWorldState(void);             // Apply received world state to all players
 Boolean NetShouldSendThisFrame(void);   // Returns true if it's time to send network data
-void ClientApplyHostPositions(void);    // Apply host-authoritative car positions (call after physics)
+
+// Weapon synchronization
+void Net_BroadcastWeaponEvent(int weaponType, int playerNum, Boolean throwForward,
+                              float posX, float posY, float posZ,
+                              float velX, float velY, float velZ, float rotY);
+
+// Debug info (for network tuning)
+uint32_t Net_GetEstimatedRTT(void);         // Returns estimated round-trip time in ms
+int32_t Net_GetClockOffset(void);           // Returns clock offset (host - local) in ms
+uint32_t Net_GetAdaptiveRenderDelay(void);  // Returns current render delay in ms
+Boolean Net_IsClockSynced(void);            // Returns true if clock has been synced
+uint32_t Net_GetRTTJitter(void);            // Returns RTT jitter (std dev) in ms
+uint32_t Net_GetPacketDeliveryPercent(void); // Returns packet delivery rate 0-100%
+
+// Diagnostic report system (F9 to toggle)
+void Net_StartDiagnostics(void);            // Start recording diagnostic samples
+void Net_StopDiagnostics(void);             // Stop recording and dump report to file
+void Net_DumpDiagnosticReport(void);        // Manually dump report without stopping
+Boolean Net_IsDiagnosticsEnabled(void);     // Returns true if recording is active
+
+#ifdef __cplusplus
+}
+#endif

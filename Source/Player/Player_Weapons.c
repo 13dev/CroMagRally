@@ -10,6 +10,7 @@
 /****************************/
 
 #include "game.h"
+#include "network.h"
 
 /****************************/
 /*    PROTOTYPES            */
@@ -320,6 +321,16 @@ ObjNode						*newObj,*head,*car;
 	SetThrowDeltas(newObj, car, 1.0, throwForward);
 
 	newObj->WhoThrew = (Ptr)car;														// remember who threw it
+
+		/* BROADCAST TO NETWORK */
+
+	if (gNetGameInProgress && playerNum == gMyNetworkPlayerNum)
+	{
+		Net_BroadcastWeaponEvent(POW_TYPE_BONE, playerNum, throwForward,
+								 newObj->Coord.x, newObj->Coord.y, newObj->Coord.z,
+								 newObj->Delta.x, newObj->Delta.y, newObj->Delta.z,
+								 car->Rot.y);
+	}
 }
 
 
@@ -407,6 +418,15 @@ ObjNode						*newObj,*head,*car;
 
 	PlayEffect_Parms3D(EFFECT_SNOWBALL, &car->Coord, NORMAL_CHANNEL_RATE-0x4000, 4.0);
 
+		/* BROADCAST TO NETWORK */
+
+	if (gNetGameInProgress && playerNum == gMyNetworkPlayerNum)
+	{
+		Net_BroadcastWeaponEvent(POW_TYPE_FREEZE, playerNum, throwForward,
+								 newObj->Coord.x, newObj->Coord.y, newObj->Coord.z,
+								 newObj->Delta.x, newObj->Delta.y, newObj->Delta.z,
+								 car->Rot.y);
+	}
 }
 
 
@@ -571,6 +591,15 @@ ObjNode						*newObj,*head,*car;
 	SetThrowDeltas(newObj, car, .6, throwForward);
 	newObj->WhoThrew = (Ptr)car;														// remember who threw it
 
+		/* BROADCAST TO NETWORK */
+
+	if (gNetGameInProgress && playerNum == gMyNetworkPlayerNum)
+	{
+		Net_BroadcastWeaponEvent(POW_TYPE_OIL, playerNum, throwForward,
+								 newObj->Coord.x, newObj->Coord.y, newObj->Coord.z,
+								 newObj->Delta.x, newObj->Delta.y, newObj->Delta.z,
+								 car->Rot.y);
+	}
 }
 
 
@@ -791,6 +820,15 @@ short		p,bestP;
 
 	newObj->TargetPlayer = bestP;
 
+		/* BROADCAST TO NETWORK */
+
+	if (gNetGameInProgress && playerNum == gMyNetworkPlayerNum)
+	{
+		Net_BroadcastWeaponEvent(POW_TYPE_BIRDBOMB, playerNum, throwForward,
+								 newObj->Coord.x, newObj->Coord.y, newObj->Coord.z,
+								 newObj->Delta.x, newObj->Delta.y, newObj->Delta.z,
+								 car->Rot.y);
+	}
 }
 
 

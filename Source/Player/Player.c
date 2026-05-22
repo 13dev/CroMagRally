@@ -107,6 +107,8 @@ short	i;
 	{
 		gPlayerInfo[gMyNetworkPlayerNum].onThisMachine = true;			// set the local player
 		gPlayerInfo[gMyNetworkPlayerNum].splitPaneNum = 0;
+		printf("[PLAYER] Network game: gMyNetworkPlayerNum=%d, gNumRealPlayers=%d, gNumTotalPlayers=%d\n",
+			   gMyNetworkPlayerNum, gNumRealPlayers, gNumTotalPlayers);
 	}
 
 			/* LOCAL GAME */
@@ -157,6 +159,9 @@ void InitPlayersAtStartOfLevel(void)
 int		i,j,type;
 Boolean	taken[NUM_LAND_CAR_TYPES];
 
+	printf("[PLAYER] InitPlayersAtStartOfLevel: gNumTotalPlayers=%d, gNumRealPlayers=%d, gMyNetworkPlayerNum=%d\n",
+		   gNumTotalPlayers, gNumRealPlayers, gMyNetworkPlayerNum);
+
 	gWorstHumanPlace = 0;
 
 
@@ -197,7 +202,11 @@ Boolean	taken[NUM_LAND_CAR_TYPES];
 			}
 		}
 
-		gPlayerInfo[i].coord.y = GetTerrainY(gPlayerInfo[i].startX,gPlayerInfo[i].startX);
+		gPlayerInfo[i].coord.y = GetTerrainY(gPlayerInfo[i].startX, gPlayerInfo[i].startZ);  // Fixed: was startX,startX
+
+		printf("[PLAYER] Creating car P%d at pos=(%.0f,%.0f,%.0f) onThisMachine=%d isComputer=%d\n",
+			   i, gPlayerInfo[i].coord.x, gPlayerInfo[i].coord.y, gPlayerInfo[i].coord.z,
+			   gPlayerInfo[i].onThisMachine, gPlayerInfo[i].isComputer);
 
 			/* CREATE THE CAR MODEL */
 

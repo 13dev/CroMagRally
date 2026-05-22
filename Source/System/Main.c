@@ -968,48 +968,32 @@ static void PlayArea(void)
 				/* GET CONTROL INFORMATION FOR THIS FRAME */
 				/******************************************/
 				//
-				// ASYNC NETWORKING: Game loop runs at 60 FPS, network at 30 Hz.
-				// Non-blocking receives happen every frame.
-				// Sends happen at fixed network tick rate.
+				// EQUAL-PLAYERS NETWORKING MODEL
+				// All players send their own position to server.
+				// Server broadcasts all positions to everyone.
+				// No host advantage - everyone is equal.
 				//
 
-				/* NETWORK CLIENT */
+		ReadKeyboard();									// read local keys
+		GetLocalKeyState();								// build a control state bitfield
 
-		if (gIsNetworkClient)
+		if (gNetGameInProgress)
 		{
-			// Non-blocking receive - uses last known state if no new data
-			ClientReceive_ControlInfoFromHost();
-
-			// Read local input every frame for responsive controls
-			ReadKeyboard();
-			GetLocalKeyState();
-		}
-
-				/* HOST OR NON-NET */
-		else
-		{
-			ReadKeyboard();									// read local keys
-			GetLocalKeyState();								// build a control state bitfield
-
-				/* NETWORK HOST - receive from clients (non-blocking) */
-
-			if (gIsNetworkHost)
-			{
-				HostReceive_ControlInfoFromClients();
-			}
+			// Process network events and send local state at fixed rate
+			NetTick_EqualPlayers();
 		}
 
 
-				/* APPLY HOST POSITIONS (CLIENT ONLY) */
+				/* APPLY WORLD STATE (ALL PLAYERS) */
 				//
-				// For network clients, apply host-authoritative positions BEFORE MoveEverything.
-				// This way UpdatePlayer_Car builds transforms with corrected positions,
-				// and attachments (wheels, head) get positioned correctly.
+				// Equal-players model: Apply server-broadcast positions BEFORE MoveEverything.
+				// All players receive the same world state from the server.
+				// Local player trusts own physics; remote players lerp to server positions.
 				//
 
-		if (gIsNetworkClient)
+		if (gNetGameInProgress)
 		{
-			ClientApplyHostPositions();
+			ApplyWorldState();
 		}
 
 				/****************/
@@ -1028,28 +1012,7 @@ static void PlayArea(void)
 		DoPlayerTerrainUpdate();
 
 
-			/********************************/
-			/* NETWORK SEND (RATE LIMITED)  */
-			/********************************/
-			//
-			// Send network data at fixed tick rate (30 Hz), not every frame.
-			// This reduces network traffic while maintaining smooth gameplay.
-			//
-
-		if (gIsNetworkClient)
-		{
-			if (NetShouldSendThisFrame())
-			{
-				ClientSend_ControlInfoToHost();
-			}
-		}
-		else if (gIsNetworkHost)
-		{
-			if (NetShouldSendThisFrame())
-			{
-				HostSend_ControlInfoToClients();
-			}
-		}
+			// NOTE: Network send is handled by NetTick_EqualPlayers() above
 
 
 			/***************/
@@ -1097,6 +1060,15 @@ static void PlayArea(void)
 			gHideInfobar = !gHideInfobar;
 		}
 
+		// F9 - Toggle network diagnostics recording
+		if (GetNewKeyState(SDL_SCANCODE_F9) && gIsNetworkClient)
+		{
+			if (Net_IsDiagnosticsEnabled())
+				Net_StopDiagnostics();
+			else
+				Net_StartDiagnostics();
+		}
+
 
 			/* SEE IF PAUSED */
 
@@ -1106,8 +1078,8 @@ static void PlayArea(void)
 				DoPaused();
 		}
 
-		if (!gIsNetworkClient)						// clients dont need to calc frame rate since its passed to them from host.
-			CalcFramesPerSecond();
+		// Equal-players model: ALL players calculate their own frame rate
+		CalcFramesPerSecond();
 
 		gGameFrameNum++;
 

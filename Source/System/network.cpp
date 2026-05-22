@@ -10,12 +10,27 @@
 /* EXTERNALS   */
 /***************/
 
-#include "game.h"
-#include "network.h"
-#include "window.h"
-#include "Backend_Network.h"
+// Standard library includes
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
+
+// Include C++ headers from Pomme/SDL BEFORE the extern "C" block
+// so their include guards prevent re-inclusion inside extern "C"
+#include "Pomme.h"
+
+// C game headers wrapped for C++ linkage
+extern "C" {
+#include "game.h"
+#include "window.h"
+}
+
+// C++ compatible headers (already have extern "C" guards)
+#include "network.h"
+#include "Backend_Network.h"
+
+// Shared network protocol (plain packed structs, no protobuf)
+#include "common/net_protocol.h"
 
 /**********************/
 /*     PROTOTYPES     */
@@ -28,10 +43,11 @@ static void OnStateChanged(NetConnectionState newState, const char* message);
 static void OnPlayerName(int playerIndex, const char* name);
 static void HandleNetworkMessage(int fromPeer, const void* data, size_t size);
 static void PlayerUnexpectedlyLeavesGame(int playerIndex);
+static void OnWorldState(const void* worldState);  // Equal-players model callback
+static void OnWeaponEvent(const void* weaponEvent);  // Remote weapon event callback
 
-// Snapshot buffer functions (forward declarations)
-static void StoreSnapshot(int playerIndex, NetHostControlInfoMessageType* mess);
-static void ClearAllSnapshotBuffers(void);
+// Reset function
+static void ResetNetworkState(void);
 
 /****************************/
 /*    CONSTANTS             */
@@ -47,40 +63,47 @@ static bool     gHasReceivedInitialHostData = false;    // Track if client has e
 static bool     gHasHostPositionData = false;
 static NetHostControlInfoMessageType gCachedHostPositions;
 
+// Equal-players model: cached world state from server (using packed struct)
+static bool     gHasWorldStateData = false;
+static NetWorldState gCachedWorldState;
+static bool     gReceivedNewWorldStateThisFrame = false;
+
 //==============================================================================
-// SNAPSHOT INTERPOLATION STATE
+// SIMPLIFIED NETWORK STATE (no snapshot interpolation, no clock sync)
 //==============================================================================
 
-// Per-player snapshot for interpolation
-typedef struct
-{
-    float posX, posY, posZ;
-    float rotY;
-    float velX, velY, velZ;
-    float steering;
-    uint32_t hostTimeMs;        // Host timestamp for this snapshot
-    uint32_t localReceiveTimeMs; // Local time when received (for age calculation)
-    bool valid;
-} PlayerSnapshot;
+// Simple RTT tracking (for debug display only)
+static uint32_t gEstimatedRTT = 0;
 
-// Ring buffer of snapshots per player
-typedef struct
-{
-    PlayerSnapshot snapshots[SNAPSHOT_BUFFER_SIZE];
-    int writeIndex;
-    int count;
-} SnapshotBuffer;
-
-static SnapshotBuffer gSnapshotBuffers[MAX_PLAYERS];
-
-// Clock synchronization state
-static uint32_t gEstimatedRTT = 50;           // Start with 50ms estimate
-static int32_t  gClockOffset = 0;             // Host clock - local clock
-static uint32_t gLastClientTimeSent = 0;      // Last clientTimeMs we sent (for RTT calc)
-static bool     gClockSynced = false;         // Have we completed initial clock sync?
+// Packet reception tracking (time-based)
+static uint32_t gPacketsReceivedWindow = 0;
+static uint32_t gStatsWindowStartTime = 0;
+static uint32_t gLastPacketDeliveryPct = 100;
+#define STATS_WINDOW_MS 2000
 
 // Per-player last client time (host tracks for echo)
 static uint32_t gLastClientTime[MAX_PLAYERS];
+
+//==============================================================================
+// DIAGNOSTIC SYSTEM (F9 to toggle recording)
+//==============================================================================
+
+#define DIAG_HISTORY_SIZE 300  // 5 seconds at 60fps
+
+typedef struct {
+    float frameDeltaMs;      // Time since last frame
+    float netDeltaMs;        // Time since last network message
+    float positionJump;      // Distance moved this frame (largest remote car)
+    uint32_t rtt;            // Current RTT
+    uint32_t packetPct;      // Packet delivery %
+} DiagSample;
+
+static DiagSample gDiagHistory[DIAG_HISTORY_SIZE];
+static int gDiagIndex = 0;
+static int gDiagCount = 0;
+static uint32_t gLastNetMessageTime = 0;
+static uint32_t gLastFrameTime = 0;
+static bool gDiagEnabled = false;
 
 // Network message types (internal, prepended to game messages)
 enum
@@ -90,6 +113,8 @@ enum
     kNetMsgType_HostControl,
     kNetMsgType_ClientControl,
     kNetMsgType_VehicleType,
+    kNetMsgType_PlayerState = 105,  // Equal-players model
+    kNetMsgType_WorldState = 106,   // Equal-players model
     kNetMsgType_NullPacket,
 };
 
@@ -135,6 +160,7 @@ static bool                             gPendingSyncMessage = false;
 static int                              gSyncCount = 0;
 static bool                             gPendingHostControlMessage = false;
 static NetHostControlInfoMessageType    gPendingHostControl;
+static bool                             gReceivedNewHostPacketThisFrame = false;  // For extrapolation logic
 static bool                             gPendingClientControlMessage[MAX_PLAYERS];
 static NetClientControlInfoMessageType  gPendingClientControl[MAX_PLAYERS];
 static bool                             gPendingVehicleTypeMessage[MAX_PLAYERS];
@@ -155,6 +181,10 @@ static char                             gNetworkStatusMessage[128] = "";
 void InitNetworkManager(void)
 {
     printf("InitNetworkManager: Starting...\n");
+    printf("[NET] Struct sizes: HostControl=%zu, ClientControl=%zu, Config=%zu\n",
+           sizeof(NetHostControlInfoMessageType),
+           sizeof(NetClientControlInfoMessageType),
+           sizeof(NetConfigMessageType));
     fflush(stdout);
 
     if (Net_Initialize())
@@ -167,6 +197,8 @@ void InitNetworkManager(void)
         Net_SetReceiveCallback(OnMessageReceived);
         Net_SetStateChangeCallback(OnStateChanged);
         Net_SetPlayerNameCallback(OnPlayerName);
+        Net_SetWorldStateCallback(OnWorldState);  // Equal-players model
+        Net_SetWeaponEventCallback(OnWeaponEvent);  // Weapon sync
 
         printf("InitNetworkManager: Network initialized successfully (GNS P2P)\n");
         fflush(stdout);
@@ -205,8 +237,13 @@ void EndNetworkGame(void)
     gHasReceivedInitialHostData = false;
     gHasHostPositionData = false;
 
-    // Clear snapshot buffers and clock sync state
-    ClearAllSnapshotBuffers();
+    // Reset equal-players model state
+    gHasWorldStateData = false;
+    gReceivedNewWorldStateThisFrame = false;
+    memset(&gCachedWorldState, 0, sizeof(NetWorldState));
+
+    // Reset network state
+    ResetNetworkState();
     memset(gLastClientTime, 0, sizeof(gLastClientTime));
 
     printf("EndNetworkGame: Network game ended\n");
@@ -240,8 +277,8 @@ Boolean SetupNetworkHosting(void)
     gHasReceivedInitialHostData = false;
     gHasHostPositionData = false;
 
-    // Clear snapshot buffers and clock sync state
-    ClearAllSnapshotBuffers();
+    // Reset network state
+    ResetNetworkState();
     memset(gLastClientTime, 0, sizeof(gLastClientTime));
 
     // Clear pending messages
@@ -299,8 +336,8 @@ Boolean SetupNetworkJoinWithRoomCode(const char* roomCode)
     gHasReceivedInitialHostData = false;
     gHasHostPositionData = false;
 
-    // Clear snapshot buffers and clock sync state
-    ClearAllSnapshotBuffers();
+    // Reset network state
+    ResetNetworkState();
     memset(gLastClientTime, 0, sizeof(gLastClientTime));
 
     // Clear pending messages from any previous game
@@ -492,10 +529,18 @@ static void HandleNetworkMessage(int fromPeer, const void* data, size_t size)
     switch (header->msgType)
     {
         case kNetMsgType_Config:
+            printf("[NET] Received CONFIG message: payloadSize=%zu, expected=%zu\n",
+                   payloadSize, sizeof(NetConfigMessageType));
             if (payloadSize >= sizeof(NetConfigMessageType))
             {
                 memcpy(&gPendingConfig, payload, sizeof(NetConfigMessageType));
                 gPendingConfigMessage = true;
+                printf("[NET] CONFIG accepted: gameMode=%d, playerNum=%d, numPlayers=%d\n",
+                       gPendingConfig.gameMode, gPendingConfig.playerNum, gPendingConfig.numPlayers);
+            }
+            else
+            {
+                printf("[NET] CONFIG REJECTED: payload too small!\n");
             }
             break;
 
@@ -508,19 +553,46 @@ static void HandleNetworkMessage(int fromPeer, const void* data, size_t size)
             break;
 
         case kNetMsgType_HostControl:
+            printf("[NET] Received HOST_CONTROL: payloadSize=%zu, expected=%zu\n",
+                   payloadSize, sizeof(NetHostControlInfoMessageType));
             if (payloadSize >= sizeof(NetHostControlInfoMessageType))
             {
                 memcpy(&gPendingHostControl, payload, sizeof(NetHostControlInfoMessageType));
                 gPendingHostControlMessage = true;
+
+                // Simple time-based packet counting
+                uint32_t statsNow = SDL_GetTicks();
+                if (gStatsWindowStartTime == 0)
+                    gStatsWindowStartTime = statsNow;
+
+                gPacketsReceivedWindow++;
+
+                uint32_t elapsed = statsNow - gStatsWindowStartTime;
+                if (elapsed >= STATS_WINDOW_MS)
+                {
+                    // Expected = elapsed_time * 60Hz
+                    uint32_t expectedPackets = (elapsed * NET_TICK_RATE) / 1000;
+                    if (expectedPackets > 0)
+                    {
+                        uint32_t pct = (gPacketsReceivedWindow * 100) / expectedPackets;
+                        if (pct > 100) pct = 100;
+                        gLastPacketDeliveryPct = pct;
+                    }
+                    gStatsWindowStartTime = statsNow;
+                    gPacketsReceivedWindow = 0;
+                }
             }
             break;
 
         case kNetMsgType_ClientControl:
+            printf("[NET] HOST received CLIENT_CONTROL: payloadSize=%zu, expected=%zu\n",
+                   payloadSize, sizeof(NetClientControlInfoMessageType));
             if (payloadSize >= sizeof(NetClientControlInfoMessageType))
             {
                 NetClientControlInfoMessageType msg;
                 memcpy(&msg, payload, sizeof(msg));
                 int playerNum = msg.playerNum;
+                printf("[NET]   playerNum=%d, controlBits=0x%x\n", playerNum, msg.controlBits);
                 if (playerNum >= 0 && playerNum < MAX_PLAYERS)
                 {
                     memcpy(&gPendingClientControl[playerNum], &msg, sizeof(msg));
@@ -651,24 +723,18 @@ void HostSendGameConfig(void)
     SDL_Delay(100);
     Net_ProcessEvents(0);
 
-    // Send config to each client
+    // Send config to each client using typed API
     for (int i = 1; i < gNumGatheredPlayers; i++)
     {
-        uint8_t buffer[sizeof(NetMsgHeader) + sizeof(NetConfigMessageType)];
-        NetMsgHeader* header = (NetMsgHeader*)buffer;
-        NetConfigMessageType* config = (NetConfigMessageType*)(buffer + sizeof(NetMsgHeader));
-
-        header->msgType = kNetMsgType_Config;
-        config->gameMode = gGameMode;
-        config->age = gTheAge;
-        config->trackNum = gTrackNum;
-        config->numPlayers = gNumGatheredPlayers;
-        config->playerNum = i;  // This client's player number
-        config->numAgesCompleted = gGamePrefs.tournamentProgression.numTracksCompleted;
-        config->difficulty = gGamePrefs.difficulty;
-        config->tagDuration = gGamePrefs.tagDuration;
-
-        Net_SendToPeer(i, buffer, sizeof(buffer), true);
+        Net_SendConfig(i,
+                       gGameMode,
+                       gTheAge,
+                       gTrackNum,
+                       i,  // This client's player number
+                       gNumGatheredPlayers,
+                       gGamePrefs.tournamentProgression.numTracksCompleted,
+                       gGamePrefs.difficulty,
+                       gGamePrefs.tagDuration);
         printf("HostSendGameConfig: Sent config to player %d\n", i);
     }
 
@@ -774,15 +840,8 @@ void HostWaitForPlayersToPrepareLevel(void)
         }
     }
 
-    // Tell all clients we're ready
-    uint8_t buffer[sizeof(NetMsgHeader) + sizeof(NetSyncMessageType)];
-    NetMsgHeader* header = (NetMsgHeader*)buffer;
-    NetSyncMessageType* sync = (NetSyncMessageType*)(buffer + sizeof(NetMsgHeader));
-
-    header->msgType = kNetMsgType_Sync;
-    sync->playerNum = 0;
-
-    Net_SendToAll(buffer, sizeof(buffer), true);
+    // Tell all clients we're ready using typed API
+    Net_SendSync(0);
 
     gSyncCount = 0;
     printf("HostWaitForPlayersToPrepareLevel: All players ready!\n");
@@ -802,15 +861,8 @@ void ClientTellHostLevelIsPrepared(void)
     printf("ClientTellHostLevelIsPrepared: Preparing to send sync (playerNum=%d)...\n", gMyNetworkPlayerNum);
     fflush(stdout);
 
-    // Tell host we're ready
-    uint8_t buffer[sizeof(NetMsgHeader) + sizeof(NetSyncMessageType)];
-    NetMsgHeader* header = (NetMsgHeader*)buffer;
-    NetSyncMessageType* sync = (NetSyncMessageType*)(buffer + sizeof(NetMsgHeader));
-
-    header->msgType = kNetMsgType_Sync;
-    sync->playerNum = gMyNetworkPlayerNum;
-
-    Net_SendToHost(buffer, sizeof(buffer), true);
+    // Tell host we're ready using typed API
+    Net_SendSync(gMyNetworkPlayerNum);
 
     printf("ClientTellHostLevelIsPrepared: Sent sync message to host, waiting for GO signal...\n");
     fflush(stdout);
@@ -859,66 +911,73 @@ void HostSend_ControlInfoToClients(void)
     if (!gIsNetworkHost)
         return;
 
-    uint8_t buffer[sizeof(NetMsgHeader) + sizeof(NetHostControlInfoMessageType)];
-    NetMsgHeader* header = (NetMsgHeader*)buffer;
-    NetHostControlInfoMessageType* msg = (NetHostControlInfoMessageType*)(buffer + sizeof(NetMsgHeader));
-
-    header->msgType = kNetMsgType_HostControl;
+    // Build message struct directly (typed API handles serialization)
+    NetHostControlInfoMessageType msg = {0};
 
     // Timestamp for clock sync
-    msg->hostTimeMs = SDL_GetTicks();
+    msg.hostTimeMs = SDL_GetTicks();
     // Echo back the most recent client timestamp (for RTT calculation)
     // For simplicity, echo back player 1's timestamp (first client)
     // In a more sophisticated system, each client would have their own echo
-    msg->echoedClientTime = gLastClientTime[1];  // First client is player 1
+    msg.echoedClientTime = gLastClientTime[1];  // First client is player 1
 
-    msg->frameCounter = gHostSendCounter++;
-    msg->fps = gFramesPerSecond;
-    msg->fpsFrac = gFramesPerSecondFrac;
-    msg->randomSeed = MyRandomLong();
+    msg.frameCounter = gHostSendCounter++;
+    msg.fps = gFramesPerSecond;
+    msg.fpsFrac = gFramesPerSecondFrac;
+    msg.randomSeed = MyRandomLong();
 
     for (int i = 0; i < MAX_PLAYERS; i++)
     {
-        msg->controlBits[i] = gPlayerInfo[i].controlBits;
-        msg->controlBitsNew[i] = gPlayerInfo[i].controlBits_New;
-        msg->analogSteeringX[i] = gPlayerInfo[i].analogSteering.x;
-        msg->analogSteeringY[i] = gPlayerInfo[i].analogSteering.y;
+        msg.controlBits[i] = gPlayerInfo[i].controlBits;
+        msg.controlBitsNew[i] = gPlayerInfo[i].controlBits_New;
+        msg.analogSteeringX[i] = gPlayerInfo[i].analogSteering.x;
+        msg.analogSteeringY[i] = gPlayerInfo[i].analogSteering.y;
+        msg.steering[i] = gPlayerInfo[i].steering;
 
-        // Pack car position state (host-authoritative)
-        msg->posX[i] = gPlayerInfo[i].coord.x;
-        msg->posY[i] = gPlayerInfo[i].coord.y;
-        msg->posZ[i] = gPlayerInfo[i].coord.z;
-        msg->steering[i] = gPlayerInfo[i].steering;
-
-        // Get rotation and velocity from objNode if available
+        // Get position, rotation, velocity from objNode (the actual car)
         ObjNode* car = gPlayerInfo[i].objNode;
         if (car)
         {
-            msg->rotY[i] = car->Rot.y;
-            msg->velX[i] = car->Delta.x;
-            msg->velY[i] = car->Delta.y;
-            msg->velZ[i] = car->Delta.z;
+            msg.posX[i] = car->Coord.x;
+            msg.posY[i] = car->Coord.y;
+            msg.posZ[i] = car->Coord.z;
+            msg.rotY[i] = car->Rot.y;
+            msg.velX[i] = car->Delta.x;
+            msg.velY[i] = car->Delta.y;
+            msg.velZ[i] = car->Delta.z;
         }
         else
         {
-            msg->rotY[i] = 0;
-            msg->velX[i] = 0;
-            msg->velY[i] = 0;
-            msg->velZ[i] = 0;
+            msg.posX[i] = gPlayerInfo[i].coord.x;
+            msg.posY[i] = gPlayerInfo[i].coord.y;
+            msg.posZ[i] = gPlayerInfo[i].coord.z;
+            msg.rotY[i] = 0;
+            msg.velX[i] = 0;
+            msg.velY[i] = 0;
+            msg.velZ[i] = 0;
         }
 
         // Race state sync
-        msg->lapNum[i] = (int8_t)gPlayerInfo[i].lapNum;
+        msg.lapNum[i] = (int8_t)gPlayerInfo[i].lapNum;
         int lap = gPlayerInfo[i].lapNum;
         if (lap < 0) lap = 0;
         if (lap >= LAPS_PER_RACE) lap = LAPS_PER_RACE - 1;
-        msg->currentLapTime[i] = gPlayerInfo[i].lapTimes[lap];
+        msg.currentLapTime[i] = gPlayerInfo[i].lapTimes[lap];
     }
 
     // Store for potential resend
-    memcpy(&gHostOutMess, msg, sizeof(gHostOutMess));
+    memcpy(&gHostOutMess, &msg, sizeof(gHostOutMess));
 
-    Net_SendToAll(buffer, sizeof(buffer), true);
+    // Debug: log first few sends
+    static int sSendCount = 0;
+    if (sSendCount++ < 10)
+    {
+        printf("[NET] HOST sending control: player0 pos=(%.1f,%.1f,%.1f) structSize=%zu\n",
+               msg.posX[0], msg.posY[0], msg.posZ[0], sizeof(msg));
+    }
+
+    // Send using typed API (no struct padding issues)
+    Net_SendHostControl(&msg);
 }
 
 
@@ -932,6 +991,9 @@ void ClientReceive_ControlInfoFromHost(void)
 {
     if (!gIsNetworkClient)
         return;
+
+    // Clear new packet flag at start of each frame
+    gReceivedNewHostPacketThisFrame = false;
 
     // Poll for network events (non-blocking)
     Net_ProcessEvents(0);
@@ -956,13 +1018,16 @@ void ClientReceive_ControlInfoFromHost(void)
         }
         else
         {
-            // No new data, use stale state (game continues smoothly)
+            // No new data this frame - that's normal if fps > network tick rate
             return;
         }
     }
 
     // Process received message
     NetHostControlInfoMessageType* mess = &gPendingHostControl;
+
+    // NOTE: Packet counting moved to receive callback (kNetMsgType_HostControl case)
+    // to accurately count all received packets, even those overwritten between frames
 
     // Skip old packets
     if (mess->frameCounter < gHostSendCounter)
@@ -973,49 +1038,21 @@ void ClientReceive_ControlInfoFromHost(void)
 
     // Allow frame skips - just update to latest received frame
     // (Previously this was a fatal error)
-    if (mess->frameCounter > gHostSendCounter)
-    {
-        // Log the skip but continue
-        // printf("ClientReceive: Skipped %u frames\n", mess->frameCounter - gHostSendCounter);
-    }
     gHostSendCounter = mess->frameCounter + 1;
 
     //==============================================================================
-    // RTT CALCULATION AND CLOCK SYNC
+    // SIMPLE RTT CALCULATION (for debug display only)
     //==============================================================================
-    // Accept any echoed timestamp from the last 2 seconds (handles out-of-order packets)
     uint32_t now = SDL_GetTicks();
     if (mess->echoedClientTime != 0 &&
         mess->echoedClientTime <= now &&
         (now - mess->echoedClientTime) < 2000)
     {
         uint32_t rtt = now - mess->echoedClientTime;
-
-        // Sanity check RTT (ignore absurdly high values)
         if (rtt < 1000)
         {
-            // Exponential moving average for RTT (7/8 old + 1/8 new)
-            gEstimatedRTT = (gEstimatedRTT * 7 + rtt) / 8;
-
-            // Calculate clock offset: host_time = local_time + offset
-            // At the time the client sent, host time was approximately (now - RTT/2) on our clock
-            // So: hostTimeMs ≈ (now - RTT/2) + offset
-            // Therefore: offset ≈ hostTimeMs - (now - RTT/2)
-            int32_t newOffset = (int32_t)mess->hostTimeMs - (int32_t)(now - gEstimatedRTT / 2);
-
-            // Smooth clock offset changes to avoid jumps
-            if (gClockSynced)
-            {
-                // Gradual adjustment (7/8 old + 1/8 new)
-                gClockOffset = (gClockOffset * 7 + newOffset) / 8;
-            }
-            else
-            {
-                // First sync - use directly
-                gClockOffset = newOffset;
-                gClockSynced = true;
-                printf("ClientReceive: Clock synced! RTT=%u, offset=%d\n", gEstimatedRTT, gClockOffset);
-            }
+            // Simple moving average: 3/4 old + 1/4 new
+            gEstimatedRTT = (gEstimatedRTT * 3 + rtt) / 4;
         }
     }
 
@@ -1046,128 +1083,38 @@ void ClientReceive_ControlInfoFromHost(void)
         gPlayerInfo[i].lapTimes[lap] = mess->currentLapTime[i];
     }
 
-    //==============================================================================
-    // STORE SNAPSHOTS FOR INTERPOLATION
-    //==============================================================================
-    for (int i = 0; i < MAX_PLAYERS; i++)
-    {
-        StoreSnapshot(i, mess);
-    }
-
-    // Also keep legacy cache for fallback
+    // Cache the latest host positions
     memcpy(&gCachedHostPositions, mess, sizeof(gCachedHostPositions));
     gHasHostPositionData = true;
+
+    // Track network message timing for diagnostics
+    gLastNetMessageTime = SDL_GetTicks();
 
     gTimeoutCounter = 0;
     gPendingHostControlMessage = false;
     gHasReceivedInitialHostData = true;
+    gReceivedNewHostPacketThisFrame = true;  // Mark that we got a new packet
 }
 
 
-//==============================================================================
-// SNAPSHOT BUFFER HELPERS
-//==============================================================================
-
-// Get estimated host time based on local clock and measured offset
-static uint32_t GetEstimatedHostTime(void)
+// Reset network state (call on game start/end)
+static void ResetNetworkState(void)
 {
-    return SDL_GetTicks() + gClockOffset;
-}
-
-// Store a snapshot in the ring buffer for a player
-static void StoreSnapshot(int playerIndex, NetHostControlInfoMessageType* mess)
-{
-    if (playerIndex < 0 || playerIndex >= MAX_PLAYERS)
-        return;
-
-    SnapshotBuffer* buf = &gSnapshotBuffers[playerIndex];
-    PlayerSnapshot* snap = &buf->snapshots[buf->writeIndex];
-
-    snap->posX = mess->posX[playerIndex];
-    snap->posY = mess->posY[playerIndex];
-    snap->posZ = mess->posZ[playerIndex];
-    snap->rotY = mess->rotY[playerIndex];
-    snap->velX = mess->velX[playerIndex];
-    snap->velY = mess->velY[playerIndex];
-    snap->velZ = mess->velZ[playerIndex];
-    snap->steering = mess->steering[playerIndex];
-    snap->hostTimeMs = mess->hostTimeMs;
-    snap->localReceiveTimeMs = SDL_GetTicks();
-    snap->valid = true;
-
-    buf->writeIndex = (buf->writeIndex + 1) % SNAPSHOT_BUFFER_SIZE;
-    if (buf->count < SNAPSHOT_BUFFER_SIZE)
-        buf->count++;
-}
-
-// Find snapshot before the given host time (for interpolation)
-static PlayerSnapshot* FindSnapshotBefore(int playerIndex, uint32_t hostTime)
-{
-    if (playerIndex < 0 || playerIndex >= MAX_PLAYERS)
-        return NULL;
-
-    SnapshotBuffer* buf = &gSnapshotBuffers[playerIndex];
-    PlayerSnapshot* best = NULL;
-
-    for (int i = 0; i < buf->count; i++)
-    {
-        PlayerSnapshot* snap = &buf->snapshots[i];
-        if (snap->valid && snap->hostTimeMs <= hostTime)
-        {
-            if (!best || snap->hostTimeMs > best->hostTimeMs)
-                best = snap;
-        }
-    }
-    return best;
-}
-
-// Find snapshot after the given host time (for interpolation)
-static PlayerSnapshot* FindSnapshotAfter(int playerIndex, uint32_t hostTime)
-{
-    if (playerIndex < 0 || playerIndex >= MAX_PLAYERS)
-        return NULL;
-
-    SnapshotBuffer* buf = &gSnapshotBuffers[playerIndex];
-    PlayerSnapshot* best = NULL;
-
-    for (int i = 0; i < buf->count; i++)
-    {
-        PlayerSnapshot* snap = &buf->snapshots[i];
-        if (snap->valid && snap->hostTimeMs > hostTime)
-        {
-            if (!best || snap->hostTimeMs < best->hostTimeMs)
-                best = snap;
-        }
-    }
-    return best;
-}
-
-// Clear all snapshot buffers (call on game start/end)
-static void ClearAllSnapshotBuffers(void)
-{
-    for (int i = 0; i < MAX_PLAYERS; i++)
-    {
-        gSnapshotBuffers[i].writeIndex = 0;
-        gSnapshotBuffers[i].count = 0;
-        for (int j = 0; j < SNAPSHOT_BUFFER_SIZE; j++)
-            gSnapshotBuffers[i].snapshots[j].valid = false;
-    }
-    gClockSynced = false;
-    gEstimatedRTT = 50;
-    gClockOffset = 0;
+    gEstimatedRTT = 0;
+    gPacketsReceivedWindow = 0;
+    gStatsWindowStartTime = 0;
+    gLastPacketDeliveryPct = 100;
 }
 
 /************** CLIENT APPLY HOST POSITIONS *********************/
 //
-// Apply host-authoritative car positions with snapshot interpolation.
-// Interpolates between buffered snapshots at (hostTime - RENDER_DELAY_MS).
+// SIMPLIFIED: Apply host-authoritative car positions with simple lerp.
+// - LOCAL PLAYER: Trust local physics, snap only on huge error (>500 units)
+// - REMOTE PLAYERS: Lerp toward latest received position (20% per frame)
 //
-
-// Helper: lerp between two floats
-static float LerpF(float a, float b, float t)
-{
-    return a + (b - a) * t;
-}
+// No snapshot interpolation, no clock sync, no render delay.
+// Just smooth movement toward the latest known position.
+//
 
 // Helper: lerp angle (handles wraparound)
 static float LerpAngle(float a, float b, float t)
@@ -1181,22 +1128,98 @@ static float LerpAngle(float a, float b, float t)
     return a + diff * t;
 }
 
-// Helper: clamp float to range
-static float ClampF(float val, float minVal, float maxVal)
-{
-    if (val < minVal) return minVal;
-    if (val > maxVal) return maxVal;
-    return val;
-}
-
 void ClientApplyHostPositions(void)
 {
+    static int sLogCounter = 0;
     if (!gIsNetworkClient)
+    {
+        if (sLogCounter++ < 5)
+            printf("[NET] ClientApplyHostPositions: Not a client (gIsNetworkClient=%d)\n", gIsNetworkClient);
         return;
+    }
+    if (!gHasHostPositionData)
+    {
+        if (sLogCounter++ < 60)
+            printf("[NET] ClientApplyHostPositions: No host position data yet\n");
+        return;
+    }
 
-    // Calculate render time: we render RENDER_DELAY_MS behind estimated host time
-    // This gives us a buffer to absorb network jitter
-    uint32_t renderTimeMs = GetEstimatedHostTime() - RENDER_DELAY_MS;
+    // Diagnostic: log what's being applied
+    static int sApplyLogCount = 0;
+    if (sApplyLogCount++ < 20)
+    {
+        printf("[NET] ClientApply: myPlayer=%d, numPlayers=%d\n",
+               gMyNetworkPlayerNum, gNumRealPlayers);
+        for (int i = 0; i < gNumRealPlayers; i++)
+        {
+            ObjNode* car = gPlayerInfo[i].objNode;
+            printf("[NET]   P%d: obj=%p, cached=(%.0f,%.0f,%.0f)",
+                   i, (void*)car,
+                   gCachedHostPositions.posX[i],
+                   gCachedHostPositions.posY[i],
+                   gCachedHostPositions.posZ[i]);
+            if (car)
+                printf(" cur=(%.0f,%.0f,%.0f)", car->Coord.x, car->Coord.y, car->Coord.z);
+            printf("\n");
+        }
+    }
+
+    //==============================================================================
+    // FIX 3: DIAGNOSTIC SAMPLING - measure position jump BEFORE lerp
+    //==============================================================================
+    float maxJumpBeforeLerp = 0;
+    if (gDiagEnabled && gDiagCount < DIAG_HISTORY_SIZE)
+    {
+        for (int i = 0; i < gNumRealPlayers; i++)
+        {
+            if (i == gMyNetworkPlayerNum) continue;
+            ObjNode* car = gPlayerInfo[i].objNode;
+            if (!car) continue;
+            float dx = gCachedHostPositions.posX[i] - car->Coord.x;
+            float dz = gCachedHostPositions.posZ[i] - car->Coord.z;
+            float jump = sqrtf(dx*dx + dz*dz);
+            if (jump > maxJumpBeforeLerp) maxJumpBeforeLerp = jump;
+        }
+    }
+
+    //==============================================================================
+    // FIX 1: Frame-time-independent lerp with EMA smoothing
+    // At 60 FPS (dt=0.0167), we want 20% smoothing per frame.
+    // Formula: smoothing = 1 - (1 - baseSmoothing)^(dt * targetFPS)
+    // Simplified: smoothing = 1 - 0.8^(dt * 60)
+    //
+    // We apply EMA to the smoothing factor itself to prevent jitter from
+    // frame time variation (e.g., 60 FPS → 25 FPS spikes).
+    //==============================================================================
+    static float gSmoothedSmoothingFactor = 0.2f;  // EMA state
+
+    float dt = gFramesPerSecondFrac;
+    float targetSmoothing = 1.0f - powf(0.8f, dt * 60.0f);
+
+    // Smooth the smoothing factor to prevent jitter from frame time variation
+    gSmoothedSmoothingFactor = gSmoothedSmoothingFactor * 0.9f + targetSmoothing * 0.1f;
+    float smoothing = gSmoothedSmoothingFactor;
+
+    // Gentler clamp - max 30% correction per frame to avoid visible jitter
+    if (smoothing < 0.05f) smoothing = 0.05f;
+    if (smoothing > 0.30f) smoothing = 0.30f;
+
+    //==============================================================================
+    // FIX 2: Position extrapolation on missing packets
+    // When no new packet arrived this frame, extrapolate the cached target
+    // positions using the last known velocity. This prevents using stale data.
+    //==============================================================================
+    if (!gReceivedNewHostPacketThisFrame)
+    {
+        for (int i = 0; i < MAX_PLAYERS; i++)
+        {
+            if (i == gMyNetworkPlayerNum) continue;
+            // Extrapolate target position using cached velocity
+            gCachedHostPositions.posX[i] += gCachedHostPositions.velX[i] * dt;
+            gCachedHostPositions.posY[i] += gCachedHostPositions.velY[i] * dt;
+            gCachedHostPositions.posZ[i] += gCachedHostPositions.velZ[i] * dt;
+        }
+    }
 
     for (int i = 0; i < MAX_PLAYERS; i++)
     {
@@ -1204,111 +1227,44 @@ void ClientApplyHostPositions(void)
         if (!car)
             continue;
 
-        // Find two snapshots bracketing our render time
-        PlayerSnapshot* before = FindSnapshotBefore(i, renderTimeMs);
-        PlayerSnapshot* after = FindSnapshotAfter(i, renderTimeMs);
-
-        float targetX, targetY, targetZ, targetRotY;
-        float targetVelX, targetVelY, targetVelZ, targetSteering;
-
-        if (before && after && after->hostTimeMs > before->hostTimeMs)
+        // LOCAL PLAYER: trust local physics completely (no network correction)
+        if (i == gMyNetworkPlayerNum)
         {
-            // Interpolate between two snapshots
-            float t = (float)(renderTimeMs - before->hostTimeMs) /
-                      (float)(after->hostTimeMs - before->hostTimeMs);
-            t = ClampF(t, 0.0f, 1.0f);
-
-            targetX = LerpF(before->posX, after->posX, t);
-            targetY = LerpF(before->posY, after->posY, t);
-            targetZ = LerpF(before->posZ, after->posZ, t);
-            targetRotY = LerpAngle(before->rotY, after->rotY, t);
-            targetVelX = LerpF(before->velX, after->velX, t);
-            targetVelY = LerpF(before->velY, after->velY, t);
-            targetVelZ = LerpF(before->velZ, after->velZ, t);
-            targetSteering = LerpF(before->steering, after->steering, t);
-        }
-        else if (after)
-        {
-            // No older snapshot - use the oldest we have (game start or packet loss)
-            targetX = after->posX;
-            targetY = after->posY;
-            targetZ = after->posZ;
-            targetRotY = after->rotY;
-            targetVelX = after->velX;
-            targetVelY = after->velY;
-            targetVelZ = after->velZ;
-            targetSteering = after->steering;
-        }
-        else if (before)
-        {
-            // Extrapolate slightly using velocity (stale data)
-            // Use velocity to predict where the car should be
-            float staleMs = (float)(renderTimeMs - before->hostTimeMs);
-            float staleSec = staleMs / 1000.0f;
-            // Limit extrapolation to 100ms to avoid wild predictions
-            if (staleSec > 0.1f) staleSec = 0.1f;
-
-            targetX = before->posX + before->velX * staleSec;
-            targetY = before->posY + before->velY * staleSec;
-            targetZ = before->posZ + before->velZ * staleSec;
-            targetRotY = before->rotY;
-            targetVelX = before->velX;
-            targetVelY = before->velY;
-            targetVelZ = before->velZ;
-            targetSteering = before->steering;
-        }
-        else
-        {
-            // No snapshots at all - fall back to legacy cached position if available
-            if (!gHasHostPositionData)
-                continue;
-            targetX = gCachedHostPositions.posX[i];
-            targetY = gCachedHostPositions.posY[i];
-            targetZ = gCachedHostPositions.posZ[i];
-            targetRotY = gCachedHostPositions.rotY[i];
-            targetVelX = gCachedHostPositions.velX[i];
-            targetVelY = gCachedHostPositions.velY[i];
-            targetVelZ = gCachedHostPositions.velZ[i];
-            targetSteering = gCachedHostPositions.steering[i];
+            continue;
         }
 
-        // Calculate distance to target
-        float dx = targetX - car->Coord.x;
-        float dy = targetY - car->Coord.y;
-        float dz = targetZ - car->Coord.z;
-        float distSq = dx*dx + dy*dy + dz*dz;
+        // REMOTE PLAYERS: lerp toward latest position (frame-time-independent)
+        car->Coord.x += (gCachedHostPositions.posX[i] - car->Coord.x) * smoothing;
+        car->Coord.y += (gCachedHostPositions.posY[i] - car->Coord.y) * smoothing;
+        car->Coord.z += (gCachedHostPositions.posZ[i] - car->Coord.z) * smoothing;
+        car->Rot.y = LerpAngle(car->Rot.y, gCachedHostPositions.rotY[i], smoothing);
 
-        // If too far off (>500 units), snap immediately (likely teleport/respawn)
-        if (distSq > 250000.0f)  // 500^2
-        {
-            car->Coord.x = targetX;
-            car->Coord.y = targetY;
-            car->Coord.z = targetZ;
-            car->Rot.y = targetRotY;
-            car->Delta.x = targetVelX;
-            car->Delta.y = targetVelY;
-            car->Delta.z = targetVelZ;
-        }
-        else
-        {
-            // With snapshot interpolation, we can apply positions more directly
-            // since we're interpolating between known good states
-            // Use a small lerp for final smoothing (handles any residual jitter)
-            float smoothing = 0.5f;  // More aggressive since interpolation handles timing
-            car->Coord.x = LerpF(car->Coord.x, targetX, smoothing);
-            car->Coord.y = LerpF(car->Coord.y, targetY, smoothing);
-            car->Coord.z = LerpF(car->Coord.z, targetZ, smoothing);
-            car->Rot.y = LerpAngle(car->Rot.y, targetRotY, smoothing);
-            car->Delta.x = LerpF(car->Delta.x, targetVelX, smoothing);
-            car->Delta.y = LerpF(car->Delta.y, targetVelY, smoothing);
-            car->Delta.z = LerpF(car->Delta.z, targetVelZ, smoothing);
-        }
-
-        // Sync playerInfo coord with objNode
+        // Sync playerInfo
         gPlayerInfo[i].coord.x = car->Coord.x;
         gPlayerInfo[i].coord.y = car->Coord.y;
         gPlayerInfo[i].coord.z = car->Coord.z;
-        gPlayerInfo[i].steering = targetSteering;
+        gPlayerInfo[i].steering = gCachedHostPositions.steering[i];
+    }
+
+    //==============================================================================
+    // DIAGNOSTIC SAMPLING (when enabled via F9)
+    //==============================================================================
+
+    if (gDiagEnabled && gDiagCount < DIAG_HISTORY_SIZE)
+    {
+        uint32_t now = SDL_GetTicks();
+        float frameDelta = gLastFrameTime ? (float)(now - gLastFrameTime) : 0;
+        gLastFrameTime = now;
+
+        DiagSample* s = &gDiagHistory[gDiagIndex];
+        s->frameDeltaMs = frameDelta;
+        s->netDeltaMs = gLastNetMessageTime ? (float)(now - gLastNetMessageTime) : 0;
+        s->positionJump = maxJumpBeforeLerp;  // FIX 3: Use pre-lerp measurement
+        s->rtt = gEstimatedRTT;
+        s->packetPct = gLastPacketDeliveryPct;
+
+        gDiagIndex = (gDiagIndex + 1) % DIAG_HISTORY_SIZE;
+        gDiagCount++;
     }
 }
 
@@ -1323,27 +1279,32 @@ void ClientSend_ControlInfoToHost(void)
     if (!gIsNetworkClient)
         return;
 
-    uint8_t buffer[sizeof(NetMsgHeader) + sizeof(NetClientControlInfoMessageType)];
-    NetMsgHeader* header = (NetMsgHeader*)buffer;
-    NetClientControlInfoMessageType* msg = (NetClientControlInfoMessageType*)(buffer + sizeof(NetMsgHeader));
-
-    header->msgType = kNetMsgType_ClientControl;
+    // Build message struct directly (typed API handles serialization)
+    NetClientControlInfoMessageType msg = {0};
 
     // Timestamp for RTT calculation
-    msg->clientTimeMs = SDL_GetTicks();
-    gLastClientTimeSent = msg->clientTimeMs;  // Remember for RTT calculation when echoed back
+    msg.clientTimeMs = SDL_GetTicks();
 
-    msg->frameCounter = gClientSendCounter[gMyNetworkPlayerNum]++;
-    msg->playerNum = gMyNetworkPlayerNum;
-    msg->controlBits = gPlayerInfo[gMyNetworkPlayerNum].controlBits;
-    msg->controlBitsNew = gPlayerInfo[gMyNetworkPlayerNum].controlBits_New;
-    msg->analogSteeringX = gPlayerInfo[gMyNetworkPlayerNum].analogSteering.x;
-    msg->analogSteeringY = gPlayerInfo[gMyNetworkPlayerNum].analogSteering.y;
+    msg.frameCounter = gClientSendCounter[gMyNetworkPlayerNum]++;
+    msg.playerNum = gMyNetworkPlayerNum;
+    msg.controlBits = gPlayerInfo[gMyNetworkPlayerNum].controlBits;
+    msg.controlBitsNew = gPlayerInfo[gMyNetworkPlayerNum].controlBits_New;
+    msg.analogSteeringX = gPlayerInfo[gMyNetworkPlayerNum].analogSteering.x;
+    msg.analogSteeringY = gPlayerInfo[gMyNetworkPlayerNum].analogSteering.y;
 
     // Store for potential resend
-    memcpy(&gClientOutMess, msg, sizeof(gClientOutMess));
+    memcpy(&gClientOutMess, &msg, sizeof(gClientOutMess));
 
-    Net_SendToHost(buffer, sizeof(buffer), true);
+    // Debug: log first few sends
+    static int sSendCount = 0;
+    if (sSendCount++ < 10)
+    {
+        printf("[NET] CLIENT sending control: player=%d, bits=0x%x, structSize=%zu\n",
+               msg.playerNum, msg.controlBits, sizeof(msg));
+    }
+
+    // Send using typed API (no struct padding issues)
+    Net_SendClientControl(&msg);
 }
 
 
@@ -1413,19 +1374,10 @@ void HostReceive_ControlInfoFromClients(void)
 
 void PlayerBroadcastVehicleType(void)
 {
-    uint8_t buffer[sizeof(NetMsgHeader) + sizeof(NetPlayerCharTypeMessage)];
-    NetMsgHeader* header = (NetMsgHeader*)buffer;
-    NetPlayerCharTypeMessage* msg = (NetPlayerCharTypeMessage*)(buffer + sizeof(NetMsgHeader));
-
-    header->msgType = kNetMsgType_VehicleType;
-    msg->playerNum = gMyNetworkPlayerNum;
-    msg->vehicleType = gPlayerInfo[gMyNetworkPlayerNum].vehicleType;
-    msg->sex = gPlayerInfo[gMyNetworkPlayerNum].sex;
-
-    if (gIsNetworkHost)
-        Net_SendToAll(buffer, sizeof(buffer), true);
-    else
-        Net_SendToHost(buffer, sizeof(buffer), true);
+    // Send using typed API (no struct padding issues)
+    Net_SendVehicleType(gMyNetworkPlayerNum,
+                        gPlayerInfo[gMyNetworkPlayerNum].vehicleType,
+                        gPlayerInfo[gMyNetworkPlayerNum].sex);
 }
 
 
@@ -1454,9 +1406,9 @@ void GetVehicleSelectionFromNetPlayers(void)
     // Create waiting message text
     NewObjectDefinitionType textDef =
     {
+        .slot = SPRITE_SLOT,
         .coord = {0, 50, 0},
         .scale = 0.4f,
-        .slot = SPRITE_SLOT,
     };
     ObjNode* waitText = TextMesh_New(Localize(STR_WAITING_FOR_PLAYERS), kTextMeshAlignCenter, &textDef);
     waitText->ColorFilter = (OGLColorRGBA) {1, 1, 1, 1};
@@ -1676,5 +1628,511 @@ void NetTick_Client(void)
         ReadKeyboard();
         GetLocalKeyState();
         ClientSend_ControlInfoToHost();
+    }
+}
+
+
+#pragma mark - Equal Players Model
+
+
+/********************* ON WORLD STATE *******************************/
+//
+// Callback from Backend_GNS.cpp when WORLD_STATE message is received.
+// Called from Net_ProcessEvents(). Receives already-decoded NetWorldState struct.
+//
+
+static void OnWorldState(const void* worldState)
+{
+    // worldState is already a decoded NetWorldState pointer from Backend_GNS.cpp
+    const NetWorldState* world = (const NetWorldState*)worldState;
+
+    // Copy the decoded world state
+    memcpy(&gCachedWorldState, world, sizeof(NetWorldState));
+
+    gHasWorldStateData = true;
+    gReceivedNewWorldStateThisFrame = true;
+
+    // Debug log (limit spam)
+    static int sWorldLogCount = 0;
+    if (sWorldLogCount++ < 30)
+    {
+        printf("[NET] OnWorldState: seq=%u, players=%d\n",
+               gCachedWorldState.sequence, (int)gCachedWorldState.player_count);
+        for (int j = 0; j < (int)gCachedWorldState.player_count; j++)
+        {
+            printf("[NET]   Recv P%d: pos=(%.0f,%.0f,%.0f)\n",
+                   gCachedWorldState.players[j].player_num,
+                   gCachedWorldState.players[j].pos_x,
+                   gCachedWorldState.players[j].pos_y,
+                   gCachedWorldState.players[j].pos_z);
+        }
+    }
+}
+
+
+/********************* SEND PLAYER STATE *******************************/
+//
+// Equal-players model: Send local player's position and input to server.
+// All players call this - server collects states and broadcasts WORLD_STATE.
+// Uses packed NetPlayerState struct.
+//
+
+void SendPlayerState(void)
+{
+    if (!gNetGameInProgress)
+        return;
+
+    ObjNode* car = gPlayerInfo[gMyNetworkPlayerNum].objNode;
+    if (!car)
+        return;
+
+    // Don't send if car position is invalid (not yet initialized)
+    // Valid track positions are typically > 1000 units from origin
+    float posMag = car->Coord.x * car->Coord.x + car->Coord.z * car->Coord.z;
+    if (posMag < 1000.0f * 1000.0f)
+    {
+        // Car not yet placed on track, skip this frame
+        return;
+    }
+
+    // Build the packed player state message
+    NetPlayerState state = {0};
+    state.player_num = gMyNetworkPlayerNum;
+    uint32_t seq = gIsNetworkHost ? gHostSendCounter++ : gClientSendCounter[gMyNetworkPlayerNum]++;
+    state.sequence = seq;
+    state.frame_counter = seq;  // Use sequence as frame counter for consistency
+    state.control_bits = gPlayerInfo[gMyNetworkPlayerNum].controlBits;
+    state.control_bits_new = gPlayerInfo[gMyNetworkPlayerNum].controlBits_New;
+    state.analog_steering_x = gPlayerInfo[gMyNetworkPlayerNum].analogSteering.x;
+    state.analog_steering_y = gPlayerInfo[gMyNetworkPlayerNum].analogSteering.y;
+
+    // Position, rotation, velocity from objNode
+    state.pos_x = car->Coord.x;
+    state.pos_y = car->Coord.y;
+    state.pos_z = car->Coord.z;
+    state.rot_y = car->Rot.y;
+    state.vel_x = car->Delta.x;
+    state.vel_y = car->Delta.y;
+    state.vel_z = car->Delta.z;
+
+    state.steering = gPlayerInfo[gMyNetworkPlayerNum].steering;
+    state.lap_num = gPlayerInfo[gMyNetworkPlayerNum].lapNum;
+
+    int lap = gPlayerInfo[gMyNetworkPlayerNum].lapNum;
+    if (lap < 0) lap = 0;
+    if (lap >= LAPS_PER_RACE) lap = LAPS_PER_RACE - 1;
+    state.lap_time_ms = gPlayerInfo[gMyNetworkPlayerNum].lapTimes[lap];
+
+    // Debug log (limit spam)
+    static int sSendLogCount = 0;
+    if (sSendLogCount++ < 30)
+    {
+        printf("[NET] SendPlayerState: P%d pos=(%.0f,%.0f,%.0f) ctrl=0x%x\n",
+               gMyNetworkPlayerNum, state.pos_x, state.pos_y, state.pos_z, state.control_bits);
+    }
+
+    Net_SendPlayerState(&state);
+}
+
+
+/********************* APPLY WORLD STATE *******************************/
+//
+// Equal-players model: Apply server-broadcast positions to all players.
+// Similar to ClientApplyHostPositions but ALL players use this equally.
+// Uses packed NetPlayerState struct.
+//
+
+void ApplyWorldState(void)
+{
+    if (!gHasWorldStateData)
+        return;
+
+    // Frame-time-independent lerp (same as legacy ClientApplyHostPositions)
+    static float gSmoothedSmoothingFactor = 0.2f;
+    float dt = gFramesPerSecondFrac;
+    float targetSmoothing = 1.0f - powf(0.8f, dt * 60.0f);
+    gSmoothedSmoothingFactor = gSmoothedSmoothingFactor * 0.9f + targetSmoothing * 0.1f;
+    float smoothing = gSmoothedSmoothingFactor;
+    if (smoothing < 0.05f) smoothing = 0.05f;
+    if (smoothing > 0.30f) smoothing = 0.30f;
+
+    // Apply each player's state from the world snapshot
+    for (int i = 0; i < (int)gCachedWorldState.player_count; i++)
+    {
+        NetPlayerState* ps = &gCachedWorldState.players[i];
+
+        // Use player_num from the state to find the correct player!
+        int playerNum = ps->player_num;
+        if (playerNum < 0 || playerNum >= gNumRealPlayers)
+            continue;
+
+        ObjNode* car = gPlayerInfo[playerNum].objNode;
+        if (!car)
+            continue;
+
+        // Skip if received position is invalid (player not yet initialized)
+        float recvPosMag = ps->pos_x * ps->pos_x + ps->pos_z * ps->pos_z;
+        if (recvPosMag < 1000.0f * 1000.0f)
+        {
+            // Invalid position from server, skip this player
+            continue;
+        }
+
+        // LOCAL PLAYER: trust local physics completely
+        if (playerNum == gMyNetworkPlayerNum)
+        {
+            continue;
+        }
+
+        // REMOTE PLAYERS: apply control state
+        gPlayerInfo[playerNum].controlBits = ps->control_bits;
+        gPlayerInfo[playerNum].controlBits_New = ps->control_bits_new;
+        gPlayerInfo[playerNum].analogSteering.x = ps->analog_steering_x;
+        gPlayerInfo[playerNum].analogSteering.y = ps->analog_steering_y;
+
+        // REMOTE PLAYERS: lerp toward server-provided position
+        float targetX = ps->pos_x;
+        float targetY = ps->pos_y;
+        float targetZ = ps->pos_z;
+
+        if (!gReceivedNewWorldStateThisFrame)
+        {
+            // Extrapolate using velocity
+            targetX += ps->vel_x * dt;
+            targetY += ps->vel_y * dt;
+            targetZ += ps->vel_z * dt;
+        }
+
+        // Debug: log application (limit spam)
+        static int sApplyLogCount = 0;
+        if (sApplyLogCount++ < 30)
+        {
+            printf("[NET] Apply P%d (remote): target=(%.0f,%.0f,%.0f) car=(%.0f,%.0f,%.0f)\n",
+                   playerNum, targetX, targetY, targetZ,
+                   car->Coord.x, car->Coord.y, car->Coord.z);
+        }
+
+        car->Coord.x += (targetX - car->Coord.x) * smoothing;
+        car->Coord.y += (targetY - car->Coord.y) * smoothing;
+        car->Coord.z += (targetZ - car->Coord.z) * smoothing;
+        car->Rot.y = LerpAngle(car->Rot.y, ps->rot_y, smoothing);
+
+        // Sync playerInfo
+        gPlayerInfo[playerNum].coord.x = car->Coord.x;
+        gPlayerInfo[playerNum].coord.y = car->Coord.y;
+        gPlayerInfo[playerNum].coord.z = car->Coord.z;
+        gPlayerInfo[playerNum].steering = ps->steering;
+
+        // Sync race state
+        gPlayerInfo[playerNum].lapNum = ps->lap_num;
+        int lap = ps->lap_num;
+        if (lap < 0) lap = 0;
+        if (lap >= LAPS_PER_RACE) lap = LAPS_PER_RACE - 1;
+        gPlayerInfo[playerNum].lapTimes[lap] = ps->lap_time_ms;
+    }
+
+    // Clear flag after applying
+    gReceivedNewWorldStateThisFrame = false;
+}
+
+
+/********************* NET TICK EQUAL PLAYERS *******************************/
+//
+// Equal-players model: All players use this tick function.
+// - Send local player state to server
+// - Receive world state from server
+// - Apply positions equally (no host advantage)
+//
+
+void NetTick_EqualPlayers(void)
+{
+    if (!gNetGameInProgress)
+        return;
+
+    // Clear new packet flag at start of each frame
+    gReceivedNewWorldStateThisFrame = false;
+
+    // Always process network events (non-blocking)
+    Net_ProcessEvents(0);
+
+    // Send local player state at fixed rate
+    if (NetShouldSendThisFrame())
+    {
+        ReadKeyboard();
+        GetLocalKeyState();
+        SendPlayerState();
+    }
+}
+
+
+#pragma mark - Debug Info
+
+
+/********************* NET DEBUG FUNCTIONS *******************************/
+//
+// For network tuning and debugging
+//
+
+uint32_t Net_GetEstimatedRTT(void)
+{
+    // Host has 0 RTT to themselves
+    if (gIsNetworkHost)
+        return 0;
+    return gEstimatedRTT;
+}
+
+int32_t Net_GetClockOffset(void)
+{
+    return 0;  // Clock sync removed
+}
+
+uint32_t Net_GetAdaptiveRenderDelay(void)
+{
+    return 0;  // Render delay removed
+}
+
+Boolean Net_IsClockSynced(void)
+{
+    return true;  // Clock sync removed, always "synced"
+}
+
+uint32_t Net_GetRTTJitter(void)
+{
+    return 0;  // Jitter tracking removed
+}
+
+uint32_t Net_GetPacketDeliveryPercent(void)
+{
+    // Return packet delivery rate as percentage (0-100)
+    // Based on: (packets received / expected packets) over 2-second window
+    // Expected = elapsed_time * NET_TICK_RATE (60Hz)
+    // Host always has 100% "delivery" (they are the source)
+    if (gIsNetworkHost)
+        return 100;
+    return gLastPacketDeliveryPct;
+}
+
+
+#pragma mark - Diagnostic Report System
+
+
+/********************* NET DUMP DIAGNOSTIC REPORT *******************************/
+//
+// Writes a diagnostic report to network_diag.txt with statistics and raw samples.
+//
+
+void Net_DumpDiagnosticReport(void)
+{
+    FILE* f = fopen("network_diag.txt", "w");
+    if (!f)
+    {
+        printf("[Diag] Error: Could not create network_diag.txt\n");
+        return;
+    }
+
+    fprintf(f, "=== CroMagRally Network Diagnostic Report ===\n");
+    fprintf(f, "Samples: %d (%.1f seconds)\n\n", gDiagCount, gDiagCount / 60.0f);
+
+    // Calculate statistics
+    float minFrame = 999, maxFrame = 0, sumFrame = 0;
+    float minNet = 999, maxNet = 0, sumNet = 0;
+    float maxJump = 0;
+    uint32_t minRTT = 9999, maxRTT = 0;
+    int rttSpikes = 0;    // RTT > 50ms
+    int frameSpikes = 0;  // Frame > 25ms
+    int netGaps = 0;      // Net delta > 50ms (missed 2+ packets)
+    int bigJumps = 0;     // Position jump > 10 units
+    int validFrames = 0;
+    int validNet = 0;
+
+    for (int i = 0; i < gDiagCount && i < DIAG_HISTORY_SIZE; i++)
+    {
+        DiagSample* s = &gDiagHistory[i];
+
+        if (s->frameDeltaMs > 0)
+        {
+            if (s->frameDeltaMs < minFrame) minFrame = s->frameDeltaMs;
+            if (s->frameDeltaMs > maxFrame) maxFrame = s->frameDeltaMs;
+            sumFrame += s->frameDeltaMs;
+            if (s->frameDeltaMs > 25) frameSpikes++;
+            validFrames++;
+        }
+
+        if (s->netDeltaMs > 0)
+        {
+            if (s->netDeltaMs < minNet) minNet = s->netDeltaMs;
+            if (s->netDeltaMs > maxNet) maxNet = s->netDeltaMs;
+            sumNet += s->netDeltaMs;
+            if (s->netDeltaMs > 50) netGaps++;
+            validNet++;
+        }
+
+        if (s->positionJump > maxJump) maxJump = s->positionJump;
+        if (s->positionJump > 10) bigJumps++;
+
+        if (s->rtt < minRTT) minRTT = s->rtt;
+        if (s->rtt > maxRTT) maxRTT = s->rtt;
+        if (s->rtt > 50) rttSpikes++;
+    }
+
+    float avgFrame = validFrames > 0 ? sumFrame / validFrames : 0;
+    float avgNet = validNet > 0 ? sumNet / validNet : 0;
+
+    fprintf(f, "FRAME TIMING:\n");
+    fprintf(f, "  Min: %.1fms  Max: %.1fms  Avg: %.1fms\n", minFrame, maxFrame, avgFrame);
+    fprintf(f, "  Spikes (>25ms): %d (%.1f%%)\n\n",
+            frameSpikes, gDiagCount > 0 ? 100.0f * frameSpikes / gDiagCount : 0);
+
+    fprintf(f, "NETWORK TIMING:\n");
+    fprintf(f, "  Min: %.1fms  Max: %.1fms  Avg: %.1fms\n", minNet, maxNet, avgNet);
+    fprintf(f, "  Gaps (>50ms): %d (%.1f%%)\n\n",
+            netGaps, gDiagCount > 0 ? 100.0f * netGaps / gDiagCount : 0);
+
+    fprintf(f, "RTT:\n");
+    fprintf(f, "  Min: %ums  Max: %ums\n", minRTT, maxRTT);
+    fprintf(f, "  Spikes (>50ms): %d (%.1f%%)\n\n",
+            rttSpikes, gDiagCount > 0 ? 100.0f * rttSpikes / gDiagCount : 0);
+
+    fprintf(f, "POSITION:\n");
+    fprintf(f, "  Max jump: %.1f units\n", maxJump);
+    fprintf(f, "  Big jumps (>10u): %d (%.1f%%)\n\n",
+            bigJumps, gDiagCount > 0 ? 100.0f * bigJumps / gDiagCount : 0);
+
+    fprintf(f, "CURRENT STATE:\n");
+    fprintf(f, "  RTT: %ums  Packet%%: %u%%\n", gEstimatedRTT, gLastPacketDeliveryPct);
+
+    fprintf(f, "\n=== RAW SAMPLES (last 50) ===\n");
+    fprintf(f, "Frame(ms) Net(ms) Jump  RTT Pkt%%\n");
+    int start = gDiagCount > 50 ? gDiagCount - 50 : 0;
+    for (int i = start; i < gDiagCount && i < DIAG_HISTORY_SIZE; i++)
+    {
+        DiagSample* s = &gDiagHistory[i];
+        fprintf(f, "%6.1f %7.1f %5.1f %4u %3u\n",
+                s->frameDeltaMs, s->netDeltaMs, s->positionJump, s->rtt, s->packetPct);
+    }
+
+    fclose(f);
+    printf("[Diag] Report written to network_diag.txt (%d samples)\n", gDiagCount);
+}
+
+
+/********************* NET START DIAGNOSTICS *******************************/
+//
+// Starts diagnostic recording.
+//
+
+void Net_StartDiagnostics(void)
+{
+    gDiagIndex = 0;
+    gDiagCount = 0;
+    gLastNetMessageTime = 0;
+    gLastFrameTime = 0;
+    gDiagEnabled = true;
+    printf("[Diag] Started recording (press F9 to stop and dump report)...\n");
+}
+
+
+/********************* NET STOP DIAGNOSTICS *******************************/
+//
+// Stops diagnostic recording and dumps the report.
+//
+
+void Net_StopDiagnostics(void)
+{
+    gDiagEnabled = false;
+    Net_DumpDiagnosticReport();
+}
+
+
+/********************* NET IS DIAGNOSTICS ENABLED *******************************/
+//
+// Returns true if diagnostic recording is currently enabled.
+//
+
+Boolean Net_IsDiagnosticsEnabled(void)
+{
+    return gDiagEnabled;
+}
+
+
+#pragma mark - Weapon Synchronization
+
+
+/********************* NET BROADCAST WEAPON EVENT *******************************/
+//
+// Called when local player throws/launches a weapon.
+// Sends the event to the server which relays it to all other players.
+//
+void Net_BroadcastWeaponEvent(int weaponType, int playerNum, Boolean throwForward,
+                              float posX, float posY, float posZ,
+                              float velX, float velY, float velZ, float rotY)
+{
+    if (!gNetGameInProgress)
+        return;
+
+    // Only broadcast our own weapons
+    if (playerNum != gMyNetworkPlayerNum)
+        return;
+
+    Net_SendWeaponEvent(weaponType, playerNum, throwForward,
+                        posX, posY, posZ, velX, velY, velZ, rotY);
+
+    printf("[NET] Broadcasting weapon event: type=%d, player=%d\n", weaponType, playerNum);
+}
+
+
+/********************* ON WEAPON EVENT *******************************/
+//
+// Callback from Backend_GNS.cpp when WEAPON_EVENT message is received.
+// Creates the weapon object for the remote player.
+//
+static void OnWeaponEvent(const void* weaponEvent)
+{
+    const NetWeaponEventMsg* msg = (const NetWeaponEventMsg*)weaponEvent;
+
+    // Ignore our own events (shouldn't happen, but safety check)
+    if (msg->player_num == gMyNetworkPlayerNum)
+        return;
+
+    // Validate player number
+    if (msg->player_num >= gNumRealPlayers)
+        return;
+
+    printf("[NET] OnWeaponEvent: player=%d, type=%d, forward=%d, pos=(%.0f,%.0f,%.0f)\n",
+           msg->player_num, msg->weapon_type, msg->throw_forward,
+           msg->pos_x, msg->pos_y, msg->pos_z);
+
+    // Create the appropriate weapon based on type
+    // These functions need the player's car object to set up properly
+    short playerNum = msg->player_num;
+    Boolean throwForward = msg->throw_forward != 0;
+
+    // Call the appropriate weapon creation function
+    // Note: These functions use global gCoord/gDelta, so we need to be careful
+    switch (msg->weapon_type)
+    {
+        case 0:  // POW_TYPE_BONE
+            ThrowBone(playerNum, throwForward);
+            break;
+
+        case 1:  // POW_TYPE_OIL
+            ThrowOil(playerNum, throwForward);
+            break;
+
+        case 3:  // POW_TYPE_BIRDBOMB
+            ThrowBirdBomb(playerNum, throwForward);
+            break;
+
+        case 7:  // POW_TYPE_FREEZE
+            ThrowFreeze(playerNum, throwForward);
+            break;
+
+        // Note: Roman candle, bottle rocket, torpedo, mine are more complex
+        // and would need additional work to sync properly
+        // For now, we handle the basic throwable weapons
+
+        default:
+            printf("[NET] Unknown weapon type %d, ignoring\n", msg->weapon_type);
+            break;
     }
 }

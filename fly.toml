@@ -1,0 +1,27 @@
+# fly.toml - Cro-Mag Rally UDP Relay Server
+# See https://fly.io/docs/networking/udp-and-tcp/
+
+app = 'server-drifting-sky-9878'
+primary_region = 'lhr'
+
+[build]
+  dockerfile = "server/Dockerfile"
+
+[deploy]
+  strategy = 'immediate'
+
+# UDP service for game traffic
+[[services]]
+  internal_port = 40000
+  protocol = "udp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 40000
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

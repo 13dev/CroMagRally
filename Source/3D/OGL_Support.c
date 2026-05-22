@@ -11,6 +11,7 @@
 /****************************/
 
 #include "game.h"
+#include "network.h"
 #include "stb_image.h"
 #include "pillarbox.h"
 #include <SDL3/SDL_opengl.h>
@@ -1318,11 +1319,11 @@ void OGL_DisableLighting(void)
 
 static char* UpdateDebugText(void)
 {
-	static char debugTextBuffer[256];
+	static char debugTextBuffer[512];
 	extern short gNumFreeSupertiles;
 	extern int gFreeTwitches;
 
-	SDL_snprintf(debugTextBuffer, sizeof(debugTextBuffer),
+	int len = SDL_snprintf(debugTextBuffer, sizeof(debugTextBuffer),
 		"FPS:\t%d"
 		"\nTRIS:\t%d"
 		"\nOBJS:\t%d"
@@ -1352,12 +1353,31 @@ static char* UpdateDebugText(void)
 		gGameWindowWidth,
 		gGameWindowHeight,
 		gNumSplitScreenPanes,
-		gPlayerInfo[0].analogSteering.x,
-		gPlayerInfo[0].steering,
-		gPlayerInfo[0].steering == gPlayerInfo[0].analogSteering.x? "": "*",
-		(int) gPlayerInfo[0].coord.x,
-		(int) gPlayerInfo[0].coord.z
+		gPlayerInfo[gMyNetworkPlayerNum].analogSteering.x,
+		gPlayerInfo[gMyNetworkPlayerNum].steering,
+		gPlayerInfo[gMyNetworkPlayerNum].steering == gPlayerInfo[gMyNetworkPlayerNum].analogSteering.x? "": "*",
+		(int) gPlayerInfo[gMyNetworkPlayerNum].coord.x,
+		(int) gPlayerInfo[gMyNetworkPlayerNum].coord.z
 	);
+
+	// Add network debug info when in a network game
+	// Format: NET: C RTT:280±45 DLY:126 PKT:98% OK
+	if (gNetGameInProgress && len < (int)sizeof(debugTextBuffer) - 100)
+	{
+		uint32_t jitter = Net_GetRTTJitter();
+		uint32_t pktDelivery = Net_GetPacketDeliveryPercent();
+
+		SDL_snprintf(debugTextBuffer + len, sizeof(debugTextBuffer) - len,
+			"\nNET:\t%s RTT:%u\xb1%u DLY:%u PKT:%u%% %s"
+			,
+			gIsNetworkHost ? "H" : "C",
+			Net_GetEstimatedRTT(),
+			jitter,
+			Net_GetAdaptiveRenderDelay(),
+			pktDelivery,
+			Net_IsClockSynced() ? "OK" : "..."
+		);
+	}
 
 	return debugTextBuffer;
 }

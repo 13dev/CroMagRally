@@ -22,7 +22,7 @@ project(${GAME_TARGET}
 option(BUILD_SDL_FROM_SOURCE "Build SDL from source" OFF)
 option(SDL_STATIC "Static link SDL" OFF)
 option(SANITIZE "Build with asan/ubsan" OFF)
-option(USE_YOJIMBO "Use Yojimbo UDP networking instead of TCP relay" OFF)
+option(USE_GNS "Use GameNetworkingSockets for UDP networking" ON)
 
 if(WIN32 OR APPLE)
 	# Don't warn
@@ -120,100 +120,31 @@ add_subdirectory(extern/Pomme)
 find_package(OpenGL REQUIRED)
 
 #------------------------------------------------------------------------------
-# YOJIMBO UDP NETWORKING (OPTIONAL)
+# GAMENETWORKINGSOCKETS (via FetchContent)
 #------------------------------------------------------------------------------
 
-if(USE_YOJIMBO)
-	message(STATUS "Yojimbo UDP networking enabled")
-
-	# Find libsodium first (required by yojimbo)
-	find_package(PkgConfig REQUIRED)
-	pkg_check_modules(SODIUM libsodium)
-
-	if(NOT SODIUM_FOUND)
-		message(FATAL_ERROR
-			"libsodium not found! Yojimbo requires libsodium.\n"
-			"Install it with:\n"
-			"  Ubuntu/Debian: sudo apt install libsodium-dev\n"
-			"  Fedora:        sudo dnf install libsodium-devel\n"
-			"  macOS:         brew install libsodium\n"
-			"Or disable Yojimbo with: -DUSE_YOJIMBO=OFF"
-		)
-	endif()
+if(USE_GNS)
+	message(STATUS "GameNetworkingSockets networking enabled (FetchContent)")
 
 	include(FetchContent)
-
-	# Fetch Yojimbo and its dependencies
-	FetchContent_Declare(yojimbo
-		GIT_REPOSITORY https://github.com/mas-bandwidth/yojimbo.git
-		GIT_TAG main
-		GIT_SHALLOW TRUE
-	)
-	FetchContent_Declare(netcode
-		GIT_REPOSITORY https://github.com/mas-bandwidth/netcode.git
-		GIT_TAG main
-		GIT_SHALLOW TRUE
-	)
-	FetchContent_Declare(reliable
-		GIT_REPOSITORY https://github.com/mas-bandwidth/reliable.git
-		GIT_TAG main
-		GIT_SHALLOW TRUE
-	)
-	FetchContent_Declare(tlsf
-		GIT_REPOSITORY https://github.com/mattconte/tlsf.git
-		GIT_TAG master
-		GIT_SHALLOW TRUE
+	FetchContent_Declare(
+		GameNetworkingSockets
+		URL https://github.com/ValveSoftware/GameNetworkingSockets/archive/refs/tags/v1.4.1.tar.gz
 	)
 
-	FetchContent_MakeAvailable(yojimbo netcode reliable tlsf)
+	set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+	set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+	set(BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 
-	# Build TLSF as a static library
-	add_library(tlsf_lib STATIC ${tlsf_SOURCE_DIR}/tlsf.c)
-	target_include_directories(tlsf_lib PUBLIC ${tlsf_SOURCE_DIR})
-
-	# Build yojimbo as a static library
-	file(GLOB YOJIMBO_SOURCES
-		${yojimbo_SOURCE_DIR}/source/*.cpp
-	)
-	add_library(yojimbo_lib STATIC ${YOJIMBO_SOURCES})
-	# Create a directory structure that matches yojimbo's expected include paths
-	# yojimbo expects: #include "tlsf/tlsf.h"
-	# TLSF repo has: tlsf.h at root
-	# We need to create a tlsf subdirectory view
-	set(YOJIMBO_TLSF_INCLUDE_DIR "${CMAKE_BINARY_DIR}/yojimbo-deps-include")
-	file(MAKE_DIRECTORY "${YOJIMBO_TLSF_INCLUDE_DIR}/tlsf")
-	file(CREATE_LINK "${tlsf_SOURCE_DIR}/tlsf.h" "${YOJIMBO_TLSF_INCLUDE_DIR}/tlsf/tlsf.h" COPY_ON_ERROR SYMBOLIC)
-	file(CREATE_LINK "${tlsf_SOURCE_DIR}/tlsf.c" "${YOJIMBO_TLSF_INCLUDE_DIR}/tlsf/tlsf.c" COPY_ON_ERROR SYMBOLIC)
-
-	target_include_directories(yojimbo_lib PUBLIC
-		${yojimbo_SOURCE_DIR}/include
-		${yojimbo_SOURCE_DIR}/netcode
-		${yojimbo_SOURCE_DIR}/reliable
-		${yojimbo_SOURCE_DIR}/serialize
-		${netcode_SOURCE_DIR}
-		${reliable_SOURCE_DIR}
-		${YOJIMBO_TLSF_INCLUDE_DIR}
-		${SODIUM_INCLUDE_DIRS}
-	)
-	target_compile_definitions(yojimbo_lib PRIVATE
-		NETCODE_ENABLE_TESTS=0
-		RELIABLE_ENABLE_TESTS=0
-	)
-	target_link_libraries(yojimbo_lib PUBLIC ${SODIUM_LIBRARIES} tlsf_lib)
-
-	# Build netcode as a static library
-	add_library(netcode_lib STATIC ${netcode_SOURCE_DIR}/netcode.c)
-	target_include_directories(netcode_lib PUBLIC ${netcode_SOURCE_DIR} ${SODIUM_INCLUDE_DIRS})
-	target_compile_definitions(netcode_lib PRIVATE NETCODE_ENABLE_TESTS=0)
-	target_link_libraries(netcode_lib PUBLIC ${SODIUM_LIBRARIES})
-
-	# Build reliable as a static library
-	add_library(reliable_lib STATIC ${reliable_SOURCE_DIR}/reliable.c)
-	target_include_directories(reliable_lib PUBLIC ${reliable_SOURCE_DIR})
-	target_compile_definitions(reliable_lib PRIVATE RELIABLE_ENABLE_TESTS=0)
+	# Save and restore BUILD_SHARED_LIBS so it only affects GNS
+	set(_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+	set(BUILD_SHARED_LIBS ON)
+	FetchContent_MakeAvailable(GameNetworkingSockets)
+	set(BUILD_SHARED_LIBS ${_saved_BUILD_SHARED_LIBS})
+else()
+	message(FATAL_ERROR "USE_GNS must be enabled - no other networking backends available")
 endif()
 
-#------------------------------------------------------------------------------
 # EXECUTABLE TARGET
 #------------------------------------------------------------------------------
 
@@ -231,13 +162,9 @@ file(GLOB_RECURSE GAME_SOURCES CONFIGURE_DEPENDS
 list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend/SDL3/.*")
 list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend/Raylib/.*")
 
-# Remove Yojimbo backend if not using Yojimbo
-if(NOT USE_YOJIMBO)
-	list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend_Yojimbo\\.cpp")
-else()
-	# Remove TCP backend when using Yojimbo
-	list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend_Network\\.cpp")
-endif()
+# Remove legacy backends (only GNS is used now)
+list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend_Yojimbo\\.cpp")
+list(FILTER GAME_SOURCES EXCLUDE REGEX ".*/Backend_Network\\.cpp")
 
 # Add SDL3 backend sources
 file(GLOB BACKEND_SOURCES CONFIGURE_DEPENDS
@@ -264,6 +191,7 @@ add_executable(${GAME_TARGET} ${GAME_SOURCES})
 target_include_directories(${GAME_TARGET} PRIVATE
 	${GAME_SRCDIR}/Headers
 	${GAME_SRCDIR}/Backend
+	${CMAKE_SOURCE_DIR}
 )
 
 #------------------------------------------------------------------------------
@@ -278,7 +206,7 @@ target_compile_definitions(${GAME_TARGET} PRIVATE
 	HQ_TERRAIN=1
 	ENABLE_LOADING_SCREEN=0
 	GL_SILENCE_DEPRECATION
-	$<$<BOOL:${USE_YOJIMBO}>:USE_YOJIMBO=1>)
+	USE_GNS=1)
 
 # Windows-specific defines (both MSVC and MinGW)
 if(WIN32)
@@ -379,15 +307,10 @@ if(APPLE)
 	target_link_libraries(${GAME_TARGET} PRIVATE "-framework Foundation" "-framework IOKit")
 endif()
 
-# Link Yojimbo libraries if enabled
-if(USE_YOJIMBO)
-	target_link_libraries(${GAME_TARGET} PRIVATE yojimbo_lib netcode_lib reliable_lib)
-	target_include_directories(${GAME_TARGET} PRIVATE
-		${yojimbo_SOURCE_DIR}/include
-		${netcode_SOURCE_DIR}
-		${reliable_SOURCE_DIR}
-	)
-endif()
+# Link GameNetworkingSockets
+target_link_libraries(${GAME_TARGET} PRIVATE GameNetworkingSockets)
+target_include_directories(${GAME_TARGET} PRIVATE ${gamenetworkingsockets_SOURCE_DIR}/include)
+
 
 #------------------------------------------------------------------------------
 # PLATFORM-SPECIFIC PROPERTIES

@@ -1,4 +1,6 @@
+out/
 build/
 .git/
+.claude/
 *.o
 *.a
