@@ -13,7 +13,6 @@ extern "C" {
 #include <steam/steamnetworkingsockets.h>
 #include <steam/isteamnetworkingutils.h>
 #include <cstring>
-#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -22,6 +21,7 @@ extern "C" {
 
 // Shared network protocol (plain packed structs, no protobuf)
 #include "common/net_protocol.h"
+#include "common/log.h"
 
 //==============================================================================
 // CONSTANTS
@@ -31,25 +31,27 @@ static const int kMaxMessageSize = 4096;
 
 //==============================================================================
 // MESSAGE TYPES (wire protocol)
+// Using NetMsgType from common/net_protocol.h as single source of truth.
+// MsgType alias with UPPER_CASE values for consistency with existing code.
 //==============================================================================
 
 enum class MsgType : uint8_t
 {
-    CONFIG = 100,
-    SYNC = 101,
-    HOST_CONTROL = 102,    // Unused - kept for protocol compatibility
-    CLIENT_CONTROL = 103,  // Unused - kept for protocol compatibility
-    VEHICLE_TYPE = 104,
-    PLAYER_STATE = 105,    // Each player sends own state to server
-    WORLD_STATE = 106,     // Server broadcasts all player states
-    PING = 110,            // Server -> Client: keep-alive
-    PONG = 111,            // Client -> Server: response to ping
-    WEAPON_EVENT = 120,    // Player threw/launched a weapon
-    ROOM_ASSIGNMENT = 200,
-    GAME_START = 201,
-    PLAYER_NAME = 202,
-    JOIN_REQUEST = 203,
-    JOIN_RESPONSE = 204,
+    CONFIG          = static_cast<uint8_t>(NetMsgType::config),
+    SYNC            = static_cast<uint8_t>(NetMsgType::sync),
+    HOST_CONTROL    = static_cast<uint8_t>(NetMsgType::host_control),
+    CLIENT_CONTROL  = static_cast<uint8_t>(NetMsgType::client_control),
+    VEHICLE_TYPE    = static_cast<uint8_t>(NetMsgType::vehicle_type),
+    PLAYER_STATE    = static_cast<uint8_t>(NetMsgType::player_state),
+    WORLD_STATE     = static_cast<uint8_t>(NetMsgType::world_state),
+    PING            = static_cast<uint8_t>(NetMsgType::ping),
+    PONG            = static_cast<uint8_t>(NetMsgType::pong),
+    WEAPON_EVENT    = static_cast<uint8_t>(NetMsgType::weapon_event),
+    ROOM_ASSIGNMENT = static_cast<uint8_t>(NetMsgType::room_assignment),
+    GAME_START      = static_cast<uint8_t>(NetMsgType::game_start),
+    PLAYER_NAME     = static_cast<uint8_t>(NetMsgType::player_name),
+    JOIN_REQUEST    = static_cast<uint8_t>(NetMsgType::join_request),
+    JOIN_RESPONSE   = static_cast<uint8_t>(NetMsgType::join_response),
 };
 
 #pragma pack(push, 1)
@@ -160,7 +162,7 @@ static void SetState(NetConnectionState state, const char* message)
         return;
 
     gConnectionState = state;
-    printf("[GNS] State changed to %d: %s\n", state, message ? message : "");
+    LOG_GNS_INFO("State changed to {}: {}", static_cast<int>(state), message ? message : "");
 
     if (gStateChangeCallback)
         gStateChangeCallback(state, message);
@@ -198,15 +200,15 @@ static void SendJoinRequest(void)
 
     gInterface->SendMessageToConnection(gConnection, &joinMsg, sizeof(joinMsg),
         k_nSteamNetworkingSend_Reliable, nullptr);
-    printf("[GNS] Sent JOIN_REQUEST (roomCode=%.4s, hosting=%d, attempt=%d)\n",
-           gIsHosting ? "####" : gRoomCode, gIsHosting, gJoinRetryCount + 1);
+    LOG_GNS_INFO("Sent JOIN_REQUEST (roomCode={:.4s}, hosting={}, attempt={})",
+                 gIsHosting ? "####" : gRoomCode, gIsHosting, gJoinRetryCount + 1);
 }
 
 static void RetryJoinRoom(void)
 {
     if (gJoinRetryCount >= kMaxJoinRetries)
     {
-        printf("[GNS] Join retry limit reached (%d attempts)\n", kMaxJoinRetries);
+        LOG_GNS_WARN("Join retry limit reached ({} attempts)", kMaxJoinRetries);
         SetLastError("Room not found after multiple attempts");
         SetState(NET_STATE_ERROR, "Room not found");
         return;
@@ -214,21 +216,27 @@ static void RetryJoinRoom(void)
 
     gJoinRetryCount++;
     gJoinRetryTime = GetTicksMs() + kJoinRetryDelayMs;
-    printf("[GNS] Will retry join in %dms (attempt %d/%d)\n",
-           kJoinRetryDelayMs, gJoinRetryCount + 1, kMaxJoinRetries);
+    LOG_GNS_INFO("Will retry join in {}ms (attempt {}/{})",
+                 kJoinRetryDelayMs, gJoinRetryCount + 1, kMaxJoinRetries);
 }
 
 static void DebugOutput(ESteamNetworkingSocketsDebugOutputType eType, const char* pszMsg)
 {
-    const char* prefix = "";
     switch (eType)
     {
-        case k_ESteamNetworkingSocketsDebugOutputType_Error: prefix = "ERROR"; break;
-        case k_ESteamNetworkingSocketsDebugOutputType_Warning: prefix = "WARN"; break;
-        case k_ESteamNetworkingSocketsDebugOutputType_Msg: prefix = "INFO"; break;
-        default: prefix = "DEBUG"; break;
+        case k_ESteamNetworkingSocketsDebugOutputType_Error:
+            LOG_GNS_ERROR("{}", pszMsg);
+            break;
+        case k_ESteamNetworkingSocketsDebugOutputType_Warning:
+            LOG_GNS_WARN("{}", pszMsg);
+            break;
+        case k_ESteamNetworkingSocketsDebugOutputType_Msg:
+            LOG_GNS_INFO("{}", pszMsg);
+            break;
+        default:
+            LOG_GNS_DEBUG("{}", pszMsg);
+            break;
     }
-    printf("[GNS %s] %s\n", prefix, pszMsg);
 }
 
 //==============================================================================
@@ -240,14 +248,17 @@ bool Net_Initialize(void)
     if (gNetInitialized)
         return true;
 
-    printf("[GNS] Initializing GameNetworkingSockets...\n");
+    // Initialize logging
+    cromag::log::init();
+
+    LOG_GNS_INFO("Initializing GameNetworkingSockets...");
 
     // Initialize GNS
     SteamDatagramErrMsg errMsg;
     if (!GameNetworkingSockets_Init(nullptr, errMsg))
     {
         SetLastError(errMsg);
-        printf("[GNS] Init failed: %s\n", errMsg);
+        LOG_GNS_ERROR("Init failed: {}", errMsg);
         return false;
     }
 
@@ -279,7 +290,7 @@ bool Net_Initialize(void)
 
     gNetInitialized = true;
     SetState(NET_STATE_DISCONNECTED, "Initialized");
-    printf("[GNS] Network initialized (GameNetworkingSockets)\n");
+    LOG_GNS_INFO("Network initialized (GameNetworkingSockets)");
     return true;
 }
 
@@ -293,7 +304,7 @@ void Net_Shutdown(void)
     gInterface = nullptr;
 
     gNetInitialized = false;
-    printf("[GNS] Network shutdown\n");
+    LOG_GNS_INFO("Network shutdown");
 }
 
 bool Net_IsInitialized(void)
@@ -320,11 +331,11 @@ void Net_SetSignalingServer(const char* host, uint16_t port)
 
 static bool ConnectToServer(void)
 {
-    printf("[GNS] Connecting to %s:%d...\n", gServerHost, gServerPort);
+    LOG_GNS_INFO("Connecting to {}:{}...", gServerHost, gServerPort);
 
     if (gConnection != k_HSteamNetConnection_Invalid)
     {
-        printf("[GNS] Already connected\n");
+        LOG_GNS_DEBUG("Already connected");
         return true;
     }
 
@@ -360,7 +371,7 @@ static bool ConnectToServer(void)
         return false;
     }
 
-    printf("[GNS] Connection initiated: handle=%u\n", gConnection);
+    LOG_GNS_INFO("Connection initiated: handle={}", gConnection);
     return true;
 }
 
@@ -379,14 +390,14 @@ static void DisconnectFromServer(void)
 
 static void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t* info)
 {
-    printf("[GNS] Connection status: %d -> %d\n",
-           info->m_eOldState, info->m_info.m_eState);
+    LOG_GNS_DEBUG("Connection status: {} -> {}",
+                  info->m_eOldState, info->m_info.m_eState);
 
     switch (info->m_info.m_eState)
     {
         case k_ESteamNetworkingConnectionState_Connected:
         {
-            printf("[GNS] Connected to server!\n");
+            LOG_GNS_INFO("Connected to server!");
             SetState(NET_STATE_WAITING_ROOM, "Connected, sending join request...");
 
             // Reset retry state and send initial join request
@@ -398,7 +409,7 @@ static void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t*
 
         case k_ESteamNetworkingConnectionState_ClosedByPeer:
         case k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
-            printf("[GNS] Connection lost: %s\n", info->m_info.m_szEndDebug);
+            LOG_GNS_WARN("Connection lost: {}", info->m_info.m_szEndDebug);
             gConnection = k_HSteamNetConnection_Invalid;
             SetLastError(info->m_info.m_szEndDebug);
             SetState(NET_STATE_ERROR, "Connection lost");
@@ -421,7 +432,7 @@ static void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t*
 
 bool Net_CreateHost(const char* playerName)
 {
-    printf("[GNS] Net_CreateHost called\n");
+    LOG_GNS_INFO("Net_CreateHost called");
 
     if (!gNetInitialized)
     {
@@ -500,7 +511,7 @@ bool Net_StartGame(void)
         msg.playerCount = gPlayerCount;
         gInterface->SendMessageToConnection(gConnection, &msg, sizeof(msg),
             k_nSteamNetworkingSend_Reliable, nullptr);
-        printf("[GNS] Sent GAME_START (playerCount=%d)\n", gPlayerCount);
+        LOG_GNS_INFO("Sent GAME_START (playerCount={})", gPlayerCount);
     }
 
     SetState(NET_STATE_CONNECTED, "Game started");
@@ -623,8 +634,7 @@ void Net_SendConfig(int peerIndex, int gameMode, int age, int trackNum,
 
     gInterface->SendMessageToConnection(gConnection, &msg, sizeof(msg),
         k_nSteamNetworkingSend_Reliable, nullptr);
-    printf("[GNS] Sent CONFIG: mode=%d, player=%d, numPlayers=%d\n",
-           gameMode, playerNum, numPlayers);
+    LOG_GNS_INFO("Sent CONFIG: mode={}, player={}, numPlayers={}", gameMode, playerNum, numPlayers);
 }
 
 void Net_SendSync(int playerNum)
@@ -644,12 +654,16 @@ void Net_SendHostControl(const void* data)
     if (gConnection == k_HSteamNetConnection_Invalid || !data) return;
 
     // Prepend message type byte
-    // NetHostControlInfoMessageType = 342 bytes (verified via sizeof)
-    uint8_t buffer[512];
-    buffer[0] = (uint8_t)MsgType::HOST_CONTROL;
-    memcpy(buffer + 1, data, 342);
+    // NetHostControlInfoMessageType = 342 bytes (packed struct)
+    // If this size changes, update both here and in network.h
+    constexpr size_t kHostControlSize = 342;
 
-    gInterface->SendMessageToConnection(gConnection, buffer, 343,
+    uint8_t buffer[1 + kHostControlSize];
+    buffer[0] = (uint8_t)MsgType::HOST_CONTROL;
+    memcpy(buffer + 1, data, kHostControlSize);
+
+    gInterface->SendMessageToConnection(gConnection, buffer,
+        static_cast<uint32_t>(1 + kHostControlSize),
         k_nSteamNetworkingSend_UnreliableNoDelay, nullptr);
 }
 
@@ -658,12 +672,16 @@ void Net_SendClientControl(const void* data)
     if (gConnection == k_HSteamNetConnection_Invalid || !data) return;
 
     // Prepend message type byte
-    // NetClientControlInfoMessageType = 26 bytes (packed)
-    uint8_t buffer[64];
-    buffer[0] = (uint8_t)MsgType::CLIENT_CONTROL;
-    memcpy(buffer + 1, data, 26);
+    // NetClientControlInfoMessageType = 26 bytes (packed struct)
+    // If this size changes, update both here and in network.h
+    constexpr size_t kClientControlSize = 26;
 
-    gInterface->SendMessageToConnection(gConnection, buffer, 27,
+    uint8_t buffer[1 + kClientControlSize];
+    buffer[0] = (uint8_t)MsgType::CLIENT_CONTROL;
+    memcpy(buffer + 1, data, kClientControlSize);
+
+    gInterface->SendMessageToConnection(gConnection, buffer,
+        static_cast<uint32_t>(1 + kClientControlSize),
         k_nSteamNetworkingSend_UnreliableNoDelay, nullptr);
 }
 
@@ -694,7 +712,7 @@ void Net_SendPlayerState(const void* playerState)
 
     if (msgSize == 0)
     {
-        printf("[GNS] Failed to encode PlayerState\n");
+        LOG_GNS_ERROR("Failed to encode PlayerState");
         return;
     }
 
@@ -702,8 +720,8 @@ void Net_SendPlayerState(const void* playerState)
     static int sSendLogCount = 0;
     if (sSendLogCount++ < 10)
     {
-        printf("[GNS] Sending PlayerState: P%d pos=(%.0f,%.0f,%.0f) size=%zu bytes\n",
-               state->player_num, state->pos_x, state->pos_y, state->pos_z, msgSize);
+        LOG_GNS_DEBUG("Sending PlayerState: P{} pos=({:.0f},{:.0f},{:.0f}) size={} bytes",
+                      state->player_num, state->pos_x, state->pos_y, state->pos_z, msgSize);
     }
 
     gInterface->SendMessageToConnection(gConnection, buffer, (uint32_t)msgSize,
@@ -736,8 +754,8 @@ void Net_SendWeaponEvent(int weaponType, int playerNum, int throwForward,
     static int sWeaponSendLogCount = 0;
     if (sWeaponSendLogCount++ < 20)
     {
-        printf("[GNS] Sent WEAPON_EVENT: type=%d, player=%d, pos=(%.0f,%.0f,%.0f)\n",
-               weaponType, playerNum, posX, posY, posZ);
+        LOG_GNS_DEBUG("Sent WEAPON_EVENT: type={}, player={}, pos=({:.0f},{:.0f},{:.0f})",
+                      weaponType, playerNum, posX, posY, posZ);
     }
 }
 
@@ -810,8 +828,7 @@ static void ProcessReceivedMessages(void)
         static int sRecvLogCount = 0;
         if (sRecvLogCount++ < 30)
         {
-            printf("[GNS] Received msg type=%d, size=%zu, isHosting=%d\n",
-                   msgType, size, gIsHosting);
+            LOG_GNS_DEBUG("Received msg type={}, size={}, isHosting={}", msgType, size, gIsHosting);
         }
 
         // Handle internal messages
@@ -822,7 +839,7 @@ static void ProcessReceivedMessages(void)
                 const JoinResponseMsg* jr = (const JoinResponseMsg*)data;
                 if (!jr->success)
                 {
-                    printf("[GNS] JOIN failed: %s\n", jr->errorMsg);
+                    LOG_GNS_WARN("JOIN failed: {}", jr->errorMsg);
 
                     // Check if this is a "room not found" error that might be a race condition
                     // Only retry for non-host clients (hosts create rooms, they don't join)
@@ -840,7 +857,7 @@ static void ProcessReceivedMessages(void)
                 }
                 else
                 {
-                    printf("[GNS] JOIN accepted, waiting for room assignment...\n");
+                    LOG_GNS_INFO("JOIN accepted, waiting for room assignment...");
                     gJoinRetryCount = 0;  // Reset retry count on success
                     gJoinRetryTime = 0;
                 }
@@ -860,8 +877,8 @@ static void ProcessReceivedMessages(void)
                 gPlayerCount = ra->playerCount;
                 gIsHosting = (ra->isHost != 0);
 
-                printf("[GNS] Room assignment: room=%s, player=%d, count=%d, isHost=%d\n",
-                       gRoomCode, gLocalPlayerIndex, gPlayerCount, (int)gIsHosting);
+                LOG_GNS_INFO("Room assignment: room={}, player={}, count={}, isHost={}",
+                             gRoomCode, gLocalPlayerIndex, gPlayerCount, gIsHosting);
 
                 gPlayerActive[gLocalPlayerIndex] = true;
                 strncpy(gPlayerNames[gLocalPlayerIndex], gLocalPlayerName, NET_PLAYER_NAME_LENGTH);
@@ -889,7 +906,7 @@ static void ProcessReceivedMessages(void)
             if (size >= sizeof(GameStartMsg))
             {
                 const GameStartMsg* gs = (const GameStartMsg*)data;
-                printf("[GNS] GAME_START received (playerCount=%d)\n", gs->playerCount);
+                LOG_GNS_INFO("GAME_START received (playerCount={})", gs->playerCount);
 
                 if (!gIsHosting)
                 {
@@ -911,7 +928,7 @@ static void ProcessReceivedMessages(void)
                     strncpy(gPlayerNames[idx], pn->name, NET_PLAYER_NAME_LENGTH - 1);
                     gPlayerNames[idx][NET_PLAYER_NAME_LENGTH - 1] = '\0';
                     gPlayerActive[idx] = true;
-                    printf("[GNS] Player name: %d = '%s'\n", idx, pn->name);
+                    LOG_GNS_INFO("Player name: {} = '{}'", idx, pn->name);
 
                     if (gPlayerNameCallback)
                         gPlayerNameCallback(idx, pn->name);
@@ -935,13 +952,13 @@ static void ProcessReceivedMessages(void)
                     static int sWorldLogCount = 0;
                     if (sWorldLogCount++ < 10)
                     {
-                        printf("[GNS] WORLD_STATE decoded: seq=%u, time=%u, players=%d\n",
-                               world.sequence, world.server_time_ms, (int)world.player_count);
+                        LOG_GNS_DEBUG("WORLD_STATE decoded: seq={}, time={}, players={}",
+                                      world.sequence, world.server_time_ms, static_cast<int>(world.player_count));
                     }
                 }
                 else
                 {
-                    printf("[GNS] Failed to decode WorldState: invalid message\n");
+                    LOG_GNS_WARN("Failed to decode WorldState: invalid message");
                 }
             }
         }
@@ -963,7 +980,7 @@ static void ProcessReceivedMessages(void)
                 static int sPingLogCount = 0;
                 if (sPingLogCount++ < 5)
                 {
-                    printf("[GNS] Received PING, sent PONG (server_time=%u)\n", ping->server_time_ms);
+                    LOG_GNS_DEBUG("Received PING, sent PONG (server_time={})", ping->server_time_ms);
                 }
             }
         }
@@ -983,9 +1000,9 @@ static void ProcessReceivedMessages(void)
                     static int sWeaponRecvLogCount = 0;
                     if (sWeaponRecvLogCount++ < 20)
                     {
-                        printf("[GNS] Received WEAPON_EVENT: type=%d, player=%d, pos=(%.0f,%.0f,%.0f)\n",
-                               weaponMsg->weapon_type, weaponMsg->player_num,
-                               weaponMsg->pos_x, weaponMsg->pos_y, weaponMsg->pos_z);
+                        LOG_GNS_DEBUG("Received WEAPON_EVENT: type={}, player={}, pos=({:.0f},{:.0f},{:.0f})",
+                                      weaponMsg->weapon_type, weaponMsg->player_num,
+                                      weaponMsg->pos_x, weaponMsg->pos_y, weaponMsg->pos_z);
                     }
                 }
             }
@@ -1021,7 +1038,7 @@ void Net_ProcessEvents(int timeoutMs)
     if (gJoinRetryTime > 0 && GetTicksMs() >= gJoinRetryTime)
     {
         gJoinRetryTime = 0;
-        printf("[GNS] Executing join retry...\n");
+        LOG_GNS_DEBUG("Executing join retry...");
         SendJoinRequest();
     }
 }
@@ -1059,7 +1076,7 @@ void Net_CleanupSession(void)
     }
 
     SetState(NET_STATE_DISCONNECTED, "Cleaned up");
-    printf("[GNS] Session cleaned up\n");
+    LOG_GNS_INFO("Session cleaned up");
 }
 
 #endif // USE_GNS

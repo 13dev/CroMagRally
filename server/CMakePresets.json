@@ -12,6 +12,16 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/${presetName}",
       "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_TOOLCHAIN_FILE": "$env{HOME}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "base-docker",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/${presetName}",
+      "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
@@ -26,6 +36,14 @@
     {
       "name": "release",
       "displayName": "Release",
+      "inherits": "base-docker",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "release-vcpkg",
+      "displayName": "Release (with vcpkg)",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
@@ -50,6 +68,10 @@
     {
       "name": "release",
       "configurePreset": "release"
+    },
+    {
+      "name": "release-vcpkg",
+      "configurePreset": "release-vcpkg"
     },
     {
       "name": "release-static",

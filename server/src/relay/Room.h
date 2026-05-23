@@ -41,9 +41,16 @@ public:
     }
 
     // Player state tracking (for equal-players model, using packed structs)
-    void updatePlayerState(int playerIndex, const NetPlayerState& state);
+    // Returns true if state was accepted, false if rejected (old sequence)
+    bool updatePlayerState(int playerIndex, const NetPlayerState& state);
     [[nodiscard]] const NetPlayerState& getPlayerState(int playerIndex) const { return m_playerStates[playerIndex]; }
     [[nodiscard]] const std::array<NetPlayerState, kMaxPlayersPerRoom>& getAllPlayerStates() const { return m_playerStates; }
+
+    // Ready state tracking (per-player bitmask)
+    void setPlayerReady(int playerIndex);
+    [[nodiscard]] bool isPlayerReady(int playerIndex) const;
+    [[nodiscard]] bool areAllPlayersReady() const;
+    [[nodiscard]] uint8_t getReadyMask() const { return m_playerReadyMask; }
 
 private:
     void generateCode();
@@ -51,10 +58,12 @@ private:
     std::array<char, kRoomCodeLength + 1> m_code{};
     std::array<HSteamNetConnection, kMaxPlayersPerRoom> m_connections{};
     std::array<NetPlayerState, kMaxPlayersPerRoom> m_playerStates{};  // Cached player states for broadcasting
+    std::array<uint32_t, kMaxPlayersPerRoom> m_lastSequence{};        // Last accepted sequence per player
     HSteamNetConnection m_hostConnection = k_HSteamNetConnection_Invalid;
     int  m_playerCount = 0;
     bool m_active = false;
     bool m_gameStarted = false;
+    uint8_t m_playerReadyMask = 0;  // Bitmask of ready players
 };
 
 } // namespace relay

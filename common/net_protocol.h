@@ -47,6 +47,70 @@ constexpr int kNetTickRateHz = 60;
 #endif
 
 //==============================================================================
+// PLAYER STATUS (for lobby ready tracking)
+//==============================================================================
+
+#ifdef __cplusplus
+enum class NetPlayerStatus : uint8_t
+{
+    disconnected = 0,
+    connecting   = 1,
+    in_lobby     = 2,   // Connected, waiting to choose vehicle
+    ready        = 3,   // Vehicle chosen, ready to play
+    loading      = 4,   // Loading level
+    in_game      = 5,
+    dropped      = 6
+};
+#else
+typedef enum {
+    NET_PLAYER_DISCONNECTED = 0,
+    NET_PLAYER_CONNECTING   = 1,
+    NET_PLAYER_IN_LOBBY     = 2,
+    NET_PLAYER_READY        = 3,
+    NET_PLAYER_LOADING      = 4,
+    NET_PLAYER_IN_GAME      = 5,
+    NET_PLAYER_DROPPED      = 6
+} NetPlayerStatus;
+#endif
+
+//==============================================================================
+// ERROR CODES (for structured error handling)
+//==============================================================================
+
+#ifdef __cplusplus
+enum class NetErrorCode : uint8_t
+{
+    none = 0,
+    timeout_config,         // Timeout waiting for game config
+    timeout_sync,           // Timeout waiting for sync
+    timeout_vehicle,        // Timeout waiting for vehicle selection
+    player_dropped,         // Player disconnected during game
+    connection_lost,        // Lost connection to server/host
+    invalid_state,          // Invalid state machine transition
+    protocol_mismatch,      // Protocol version mismatch
+    room_full,              // Room has max players
+    room_not_found,         // Room code not found
+    invalid_message,        // Malformed message received
+    bounds_error            // Array bounds violation prevented
+};
+#else
+typedef enum {
+    NET_ERROR_NONE = 0,
+    NET_ERROR_TIMEOUT_CONFIG,
+    NET_ERROR_TIMEOUT_SYNC,
+    NET_ERROR_TIMEOUT_VEHICLE,
+    NET_ERROR_PLAYER_DROPPED,
+    NET_ERROR_CONNECTION_LOST,
+    NET_ERROR_INVALID_STATE,
+    NET_ERROR_PROTOCOL_MISMATCH,
+    NET_ERROR_ROOM_FULL,
+    NET_ERROR_ROOM_NOT_FOUND,
+    NET_ERROR_INVALID_MESSAGE,
+    NET_ERROR_BOUNDS_ERROR
+} NetErrorCode;
+#endif
+
+//==============================================================================
 // MESSAGE TYPES (Enum.3: enum class in C++, plain enum in C)
 //==============================================================================
 
@@ -56,8 +120,8 @@ enum class NetMsgType : uint8_t
     // Game messages (100-199)
     config          = 100,
     sync            = 101,
-    host_control    = 102,  // Legacy - unused
-    client_control  = 103,  // Legacy - unused
+    host_control    = 102,  // Host -> Clients: control state during gameplay
+    client_control  = 103,  // Client -> Host: control state during gameplay
     vehicle_type    = 104,
     player_state    = 105,
     world_state     = 106,

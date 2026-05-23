@@ -126,6 +126,8 @@ find_package(OpenGL REQUIRED)
 if(USE_GNS)
 	find_package(GameNetworkingSockets CONFIG REQUIRED)
 	message(STATUS "Found GameNetworkingSockets")
+	find_package(spdlog CONFIG REQUIRED)
+	message(STATUS "Found spdlog")
 else()
 	message(FATAL_ERROR "USE_GNS must be enabled - no other networking backends available")
 endif()
@@ -294,6 +296,9 @@ endif()
 
 # Link GameNetworkingSockets
 target_link_libraries(${GAME_TARGET} PRIVATE GameNetworkingSockets::GameNetworkingSockets)
+
+# Link spdlog for structured logging
+target_link_libraries(${GAME_TARGET} PRIVATE spdlog::spdlog)
 
 
 #------------------------------------------------------------------------------

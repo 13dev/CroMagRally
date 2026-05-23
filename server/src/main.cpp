@@ -8,7 +8,6 @@
 #include <steam/steamnetworkingsockets.h>
 #include <steam/isteamnetworkingutils.h>
 #include <csignal>
-#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <chrono>
@@ -16,6 +15,7 @@
 
 #include "relay/Server.h"
 #include "protocol/Protocol.h"
+#include "common/log.h"
 
 namespace {
 
@@ -28,14 +28,18 @@ void signalHandler(int)
 
 void debugOutput(ESteamNetworkingSocketsDebugOutputType type, const char* msg)
 {
-    const char* prefix = "";
     switch (type)
     {
-        case k_ESteamNetworkingSocketsDebugOutputType_Error:   prefix = "ERROR"; break;
-        case k_ESteamNetworkingSocketsDebugOutputType_Warning: prefix = "WARN";  break;
-        default: return; // Only log errors and warnings
+        case k_ESteamNetworkingSocketsDebugOutputType_Error:
+            LOG_GNS_ERROR("{}", msg);
+            break;
+        case k_ESteamNetworkingSocketsDebugOutputType_Warning:
+            LOG_GNS_WARN("{}", msg);
+            break;
+        default:
+            // Only log errors and warnings
+            break;
     }
-    std::printf("[GNS %s] %s\n", prefix, msg);
 }
 
 } // anonymous namespace
@@ -48,10 +52,13 @@ int main(int argc, char* argv[])
     // Disable stdout buffering for container logging
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-    std::printf("CroMagRally Relay Server\n");
-    std::printf("========================\n");
-    std::printf("[Server] Build: %s %s\n", __DATE__, __TIME__);
-    std::printf("[Server] System time: %lld\n", static_cast<long long>(std::time(nullptr)));
+    // Initialize logging
+    cromag::log::init();
+
+    LOG_SERVER_INFO("CroMagRally Relay Server");
+    LOG_SERVER_INFO("========================");
+    LOG_SERVER_INFO("Build: {} {}", __DATE__, __TIME__);
+    LOG_SERVER_INFO("System time: {}", static_cast<long long>(std::time(nullptr)));
 
     // Initialize RNG
     std::srand(static_cast<unsigned>(std::time(nullptr)));
@@ -64,7 +71,7 @@ int main(int argc, char* argv[])
     SteamDatagramErrMsg errMsg;
     if (!GameNetworkingSockets_Init(nullptr, errMsg))
     {
-        std::printf("[Server] Failed to init GNS: %s\n", errMsg);
+        LOG_SERVER_ERROR("Failed to init GNS: {}", errMsg);
         return 1;
     }
 
@@ -87,7 +94,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    std::printf("[Server] Running at %dHz tick rate\n", relay::kTickRateHz);
+    LOG_SERVER_INFO("Running at {}Hz tick rate", relay::kTickRateHz);
 
     // Main loop
     auto lastStats = std::chrono::steady_clock::now();
@@ -102,18 +109,17 @@ int main(int argc, char* argv[])
         if (elapsed >= relay::kStatsIntervalSec)
         {
             auto stats = server.getStats();
-            std::printf("[Server] Status: %d rooms, %d players\n",
-                        stats.activeRooms, stats.totalPlayers);
+            LOG_SERVER_INFO("Status: {} rooms, {} players", stats.activeRooms, stats.totalPlayers);
             lastStats = now;
         }
 
         std::this_thread::sleep_for(std::chrono::microseconds(relay::kTickIntervalUs));
     }
 
-    std::printf("\n[Server] Shutting down...\n");
+    LOG_SERVER_INFO("Shutting down...");
     server.stop();
     GameNetworkingSockets_Kill();
-    std::printf("[Server] Shutdown complete\n");
+    LOG_SERVER_INFO("Shutdown complete");
 
     return 0;
 }

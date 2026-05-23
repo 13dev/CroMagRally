@@ -326,7 +326,7 @@ static void UpdateHostDisplay(void)
     }
     TextMesh_Update(countStr, 0, gPlayerCountText);
 
-    // Update player list with connection status
+    // Update player list with connection and ready status
     for (int i = 0; i < NET_MAX_PLAYERS; i++)
     {
         if (i < numPlayers)
@@ -334,23 +334,37 @@ static void UpdateHostDisplay(void)
             char nameStr[48];
             if (i == 0)
             {
-                // Host
-                SDL_snprintf(nameStr, sizeof(nameStr), "%d. %s (HOST)",
-                            i + 1, gPlayerNameStrings[i]);
-                gPlayerListText[i]->ColorFilter = (OGLColorRGBA) {1, 1, .5f, 1};  // Yellow for host
+                // Host - check if host has selected vehicle (ready)
+                bool hostReady = Net_IsPlayerReady(0);
+                if (hostReady)
+                {
+                    SDL_snprintf(nameStr, sizeof(nameStr), "%d. %s (HOST) READY",
+                                i + 1, gPlayerNameStrings[i]);
+                    gPlayerListText[i]->ColorFilter = (OGLColorRGBA) {.2f, 1, .2f, 1};  // Green for ready
+                }
+                else
+                {
+                    SDL_snprintf(nameStr, sizeof(nameStr), "%d. %s (HOST)",
+                                i + 1, gPlayerNameStrings[i]);
+                    gPlayerListText[i]->ColorFilter = (OGLColorRGBA) {1, 1, .5f, 1};  // Yellow for host
+                }
             }
             else
             {
-                // Client - show connection status
-                bool isConnected = (i <= numP2PConnected);  // P2P connections are 1-indexed
-                const char* status = isConnected ? "READY" : "connecting...";
-                SDL_snprintf(nameStr, sizeof(nameStr), "%d. %s - %s",
-                            i + 1, gPlayerNameStrings[i], status);
-
-                if (isConnected)
+                // Client - show ready status based on vehicle selection
+                bool isReady = Net_IsPlayerReady(i);
+                if (isReady)
+                {
+                    SDL_snprintf(nameStr, sizeof(nameStr), "%d. %s - READY",
+                                i + 1, gPlayerNameStrings[i]);
                     gPlayerListText[i]->ColorFilter = (OGLColorRGBA) {.2f, 1, .2f, 1};  // Green for ready
+                }
                 else
-                    gPlayerListText[i]->ColorFilter = (OGLColorRGBA) {1, .8f, .2f, 1};  // Orange for connecting
+                {
+                    SDL_snprintf(nameStr, sizeof(nameStr), "%d. %s - choosing...",
+                                i + 1, gPlayerNameStrings[i]);
+                    gPlayerListText[i]->ColorFilter = (OGLColorRGBA) {1, .6f, 0, 1};  // Orange for choosing
+                }
             }
             TextMesh_Update(nameStr, 0, gPlayerListText[i]);
         }

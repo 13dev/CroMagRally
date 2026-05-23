@@ -215,6 +215,10 @@ void Net_BroadcastWeaponEvent(int weaponType, int playerNum, Boolean throwForwar
                               float posX, float posY, float posZ,
                               float velX, float velY, float velZ, float rotY);
 
+// Player ready state (for lobby display)
+Boolean Net_IsPlayerReady(int playerNum);  // Returns true if player chose vehicle
+int Net_GetReadyPlayerCount(void);         // Returns count of ready players
+
 // Debug info (for network tuning)
 uint32_t Net_GetEstimatedRTT(void);         // Returns estimated round-trip time in ms
 int32_t Net_GetClockOffset(void);           // Returns clock offset (host - local) in ms
@@ -228,6 +232,9 @@ void Net_StartDiagnostics(void);            // Start recording diagnostic sample
 void Net_StopDiagnostics(void);             // Stop recording and dump report to file
 void Net_DumpDiagnosticReport(void);        // Manually dump report without stopping
 Boolean Net_IsDiagnosticsEnabled(void);     // Returns true if recording is active
+
+// Error code handling
+const char* Net_GetErrorString(int errorCode);  // Get human-readable error string
 
 #ifdef __cplusplus
 }

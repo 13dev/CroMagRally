@@ -15,7 +15,8 @@ include(FetchContent)
 
 FetchContent_Declare(
     GameNetworkingSockets
-    URL https://github.com/ValveSoftware/GameNetworkingSockets/archive/refs/tags/v1.4.1.tar.gz
+    URL https://github.com/ValveSoftware/GameNetworkingSockets/archive/refs/tags/v1.5.1.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -45,16 +46,27 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${gamenetworkingsockets_SOURCE_DIR}/include
 )
 
-target_compile_definitions(${PROJECT_NAME} PRIVATE
-    STEAMNETWORKINGSOCKETS_STANDALONELIB
-)
+# Note: STEAMNETWORKINGSOCKETS_STANDALONELIB is defined by GNS v1.5+ headers
 
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
+# Try to find spdlog via vcpkg/system, fallback to FetchContent for Docker builds
+find_package(spdlog CONFIG QUIET)
+if(NOT spdlog_FOUND)
+    message(STATUS "spdlog not found via find_package, fetching from GitHub...")
+    FetchContent_Declare(
+        spdlog
+        URL https://github.com/gabime/spdlog/archive/refs/tags/v1.15.3.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(spdlog)
+endif()
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
     GameNetworkingSockets
     Threads::Threads
+    spdlog::spdlog
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE

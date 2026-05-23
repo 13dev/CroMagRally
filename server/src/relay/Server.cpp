@@ -1,10 +1,10 @@
 #include "Server.h"
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include "common/log.h"
 
 namespace relay {
 
@@ -26,7 +26,7 @@ bool Server::start(uint16_t port)
     m_interface = SteamNetworkingSockets();
     if (!m_interface)
     {
-        std::printf("[Server] Failed to get ISteamNetworkingSockets\n");
+        LOG_SERVER_ERROR("Failed to get ISteamNetworkingSockets");
         return false;
     }
 
@@ -50,17 +50,17 @@ bool Server::start(uint16_t port)
             char ipStr[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &addr->sin_addr, ipStr, sizeof(ipStr));
             listenAddr.SetIPv4(ntohl(addr->sin_addr.s_addr), port);
-            std::printf("[Server] Fly.io detected, binding to %s:%d (fly-global-services)\n", ipStr, port);
+            LOG_SERVER_INFO("Fly.io detected, binding to {}:{} (fly-global-services)", ipStr, port);
             freeaddrinfo(result);
         }
         else
         {
-            std::printf("[Server] Warning: Could not resolve fly-global-services, using 0.0.0.0\n");
+            LOG_SERVER_WARN("Could not resolve fly-global-services, using 0.0.0.0");
         }
     }
     else
     {
-        std::printf("[Server] Local mode, binding to 0.0.0.0:%d\n", port);
+        LOG_SERVER_INFO("Local mode, binding to 0.0.0.0:{}", port);
     }
 
     // Configure connection callback
@@ -71,18 +71,18 @@ bool Server::start(uint16_t port)
     m_listenSocket = m_interface->CreateListenSocketIP(listenAddr, 1, opts);
     if (m_listenSocket == k_HSteamListenSocket_Invalid)
     {
-        std::printf("[Server] Failed to create listen socket\n");
+        LOG_SERVER_ERROR("Failed to create listen socket");
         return false;
     }
 
     m_pollGroup = m_interface->CreatePollGroup();
     if (m_pollGroup == k_HSteamNetPollGroup_Invalid)
     {
-        std::printf("[Server] Failed to create poll group\n");
+        LOG_SERVER_ERROR("Failed to create poll group");
         return false;
     }
 
-    std::printf("[Server] Listening on port %d (max %d clients)\n", port, kMaxClients);
+    LOG_SERVER_INFO("Listening on port {} (max {} clients)", port, kMaxClients);
     return true;
 }
 
@@ -153,7 +153,7 @@ Server::Stats Server::getStats() const
 
 void Server::onClientConnect(HSteamNetConnection conn)
 {
-    std::printf("[Server] Client connected: %u (pending JOIN_REQUEST)\n", conn);
+    LOG_SERVER_INFO("Client connected: {} (pending JOIN_REQUEST)", conn);
     m_interface->SetConnectionPollGroup(conn, m_pollGroup);
 
     // Add to pending - wait for JOIN_REQUEST to assign to room
@@ -162,7 +162,7 @@ void Server::onClientConnect(HSteamNetConnection conn)
 
 void Server::onClientDisconnect(HSteamNetConnection conn)
 {
-    std::printf("[Server] Client disconnected: %u\n", conn);
+    LOG_SERVER_INFO("Client disconnected: {}", conn);
     m_pendingConnections.erase(conn);
     removeFromRoom(conn);
 }
@@ -250,6 +250,22 @@ void Server::removeFromRoom(HSteamNetConnection conn)
 
 void Server::handleJoinRequest(HSteamNetConnection conn, const JoinRequestMsg* msg)
 {
+    // Check if connection already in a room (duplicate JOIN_REQUEST)
+    auto it = m_connectionToRoom.find(conn);
+    if (it != m_connectionToRoom.end())
+    {
+        LOG_SERVER_DEBUG("Duplicate JOIN_REQUEST from already-joined connection {}", conn);
+        // Send current room assignment again (idempotent response)
+        Room* existingRoom = findRoomByConnection(conn);
+        if (existingRoom)
+        {
+            int idx = existingRoom->getPlayerIndex(conn);
+            sendJoinResponse(conn, true);
+            sendRoomAssignment(conn, existingRoom, idx, existingRoom->isHost(conn));
+        }
+        return;
+    }
+
     // Remove from pending
     m_pendingConnections.erase(conn);
 
@@ -270,7 +286,7 @@ void Server::handleJoinRequest(HSteamNetConnection conn, const JoinRequestMsg* m
         Room* room = createRoom(conn);
         if (room)
         {
-            std::printf("[Room] Created room %s with host %u\n", room->getCode(), conn);
+            LOG_ROOM_INFO("Created room {} with host {}", room->getCode(), conn);
             sendJoinResponse(conn, true);
             sendRoomAssignment(conn, room, 0, true);
         }
@@ -288,7 +304,7 @@ void Server::handleJoinRequest(HSteamNetConnection conn, const JoinRequestMsg* m
         {
             char errorMsg[64];
             std::snprintf(errorMsg, sizeof(errorMsg), "Room '%.4s' not found", msg->roomCode);
-            std::printf("[Room] %s (client %u)\n", errorMsg, conn);
+            LOG_ROOM_WARN("{} (client {})", errorMsg, conn);
             sendJoinResponse(conn, false, errorMsg);
             m_interface->CloseConnection(conn, 0, errorMsg, false);
             return;
@@ -296,7 +312,7 @@ void Server::handleJoinRequest(HSteamNetConnection conn, const JoinRequestMsg* m
 
         if (room->isFull())
         {
-            std::printf("[Room] Room %s is full (client %u)\n", room->getCode(), conn);
+            LOG_ROOM_WARN("Room {} is full (client {})", room->getCode(), conn);
             sendJoinResponse(conn, false, "Room is full");
             m_interface->CloseConnection(conn, 0, "Room is full", false);
             return;
@@ -304,7 +320,7 @@ void Server::handleJoinRequest(HSteamNetConnection conn, const JoinRequestMsg* m
 
         if (room->isGameStarted())
         {
-            std::printf("[Room] Room %s game already started (client %u)\n", room->getCode(), conn);
+            LOG_ROOM_WARN("Room {} game already started (client {})", room->getCode(), conn);
             sendJoinResponse(conn, false, "Game already started");
             m_interface->CloseConnection(conn, 0, "Game already started", false);
             return;
@@ -320,7 +336,7 @@ void Server::handleJoinRequest(HSteamNetConnection conn, const JoinRequestMsg* m
         }
 
         m_connectionToRoom[conn] = static_cast<int>(room - m_rooms.data());
-        std::printf("[Room] Client %u joined room %s as player %d\n", conn, room->getCode(), playerIndex);
+        LOG_ROOM_INFO("Client {} joined room {} as player {}", conn, room->getCode(), playerIndex);
 
         sendJoinResponse(conn, true);
         sendRoomAssignment(conn, room, playerIndex, false);
@@ -356,10 +372,67 @@ void Server::sendJoinResponse(HSteamNetConnection conn, bool success, const char
 
 void Server::relayMessage(HSteamNetConnection sender, const uint8_t* data, size_t size)
 {
+    // Global message size validation
     if (size < 1)
+    {
+        LOG_SERVER_WARN("Empty message from conn {}", sender);
         return;
+    }
+    if (size > kMaxMessageSize)
+    {
+        LOG_SERVER_WARN("Oversized message ({} bytes) from conn {}, dropping", size, sender);
+        return;
+    }
 
     auto msgType = static_cast<MsgType>(data[0]);
+
+    // Per-message-type size validation
+    switch (msgType)
+    {
+        case MsgType::JOIN_REQUEST:
+            if (size < sizeof(JoinRequestMsg))
+            {
+                LOG_SERVER_WARN("JOIN_REQUEST too small ({} < {}) from conn {}",
+                                size, sizeof(JoinRequestMsg), sender);
+                return;
+            }
+            break;
+        case MsgType::PLAYER_STATE:
+            if (size < 1 + sizeof(NetPlayerState))
+            {
+                LOG_SERVER_WARN("PLAYER_STATE too small ({} < {}) from conn {}",
+                                size, 1 + sizeof(NetPlayerState), sender);
+                return;
+            }
+            break;
+        case MsgType::GAME_START:
+            if (size < sizeof(GameStartMsg))
+            {
+                LOG_SERVER_WARN("GAME_START too small ({} < {}) from conn {}",
+                                size, sizeof(GameStartMsg), sender);
+                return;
+            }
+            break;
+        case MsgType::PLAYER_NAME:
+            if (size < sizeof(PlayerNameMsg))
+            {
+                LOG_SERVER_WARN("PLAYER_NAME too small ({} < {}) from conn {}",
+                                size, sizeof(PlayerNameMsg), sender);
+                return;
+            }
+            break;
+        case MsgType::WEAPON_EVENT:
+            if (size < sizeof(NetWeaponEventMsg))
+            {
+                LOG_SERVER_WARN("WEAPON_EVENT too small ({} < {}) from conn {}",
+                                size, sizeof(NetWeaponEventMsg), sender);
+                return;
+            }
+            break;
+        default:
+            // Other message types pass through without strict size check
+            break;
+    }
 
     // Handle JOIN_REQUEST from pending connections (before room assignment)
     if (msgType == MsgType::JOIN_REQUEST)
@@ -400,8 +473,7 @@ void Server::relayMessage(HSteamNetConnection sender, const uint8_t* data, size_
             static int sWeaponLogCount = 0;
             if (sWeaponLogCount++ < 20)
             {
-                std::printf("[Server] Relayed WEAPON_EVENT from conn %u to room %s\n",
-                            sender, room->getCode());
+                LOG_SERVER_DEBUG("Relayed WEAPON_EVENT from conn {} to room {}", sender, room->getCode());
             }
         }
         return;  // Don't do default relay
@@ -421,7 +493,7 @@ void Server::relayMessage(HSteamNetConnection sender, const uint8_t* data, size_
             }
             else
             {
-                std::printf("[Server] Failed to decode PlayerState: invalid message\n");
+                LOG_SERVER_WARN("Failed to decode PlayerState: invalid message");
             }
         }
         return;  // Don't relay - server broadcasts WORLD_STATE instead
@@ -430,8 +502,8 @@ void Server::relayMessage(HSteamNetConnection sender, const uint8_t* data, size_
     Room* room = findRoomByConnection(sender);
     if (!room)
     {
-        std::printf("[Server] relayMessage: No room for conn %u (msgType=%d), dropping\n",
-                    sender, static_cast<int>(msgType));
+        LOG_SERVER_DEBUG("relayMessage: No room for conn {} (msgType={}), dropping",
+                         sender, static_cast<int>(msgType));
         return;
     }
 
@@ -439,15 +511,15 @@ void Server::relayMessage(HSteamNetConnection sender, const uint8_t* data, size_
     static int sLogCount = 0;
     if (sLogCount++ < 50)
     {
-        std::printf("[Server] relay: type=%d, sender=%u, isHost=%d, room=%s\n",
-                    static_cast<int>(msgType), sender, room->isHost(sender), room->getCode());
+        LOG_SERVER_DEBUG("relay: type={}, sender={}, isHost={}, room={}",
+                         static_cast<int>(msgType), sender, room->isHost(sender), room->getCode());
     }
 
     // Handle game start
     if (msgType == MsgType::GAME_START && room->isHost(sender))
     {
         room->startGame();
-        std::printf("[Server] Room %s game started\n", room->getCode());
+        LOG_SERVER_INFO("Room {} game started", room->getCode());
     }
 
     // Determine send flags
@@ -487,8 +559,8 @@ void Server::sendRoomAssignment(HSteamNetConnection conn, const Room* room, int 
 
     m_interface->SendMessageToConnection(conn, &msg, sizeof(msg), k_nSteamNetworkingSend_Reliable, nullptr);
 
-    std::printf("[Server] Sent room assignment to %u: room=%s, player=%d, isHost=%d\n",
-                conn, room->getCode(), playerIndex, static_cast<int>(isHost));
+    LOG_SERVER_DEBUG("Sent room assignment to {}: room={}, player={}, isHost={}",
+                     conn, room->getCode(), playerIndex, isHost);
 }
 
 void Server::onConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t* info)
@@ -502,7 +574,7 @@ void Server::onConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t
             if (s_instance->m_interface->AcceptConnection(info->m_hConn) != k_EResultOK)
             {
                 s_instance->m_interface->CloseConnection(info->m_hConn, 0, nullptr, false);
-                std::printf("[Server] Failed to accept connection\n");
+                LOG_SERVER_WARN("Failed to accept connection");
             }
             break;
 
@@ -538,13 +610,13 @@ void Server::handlePlayerState(HSteamNetConnection conn, const NetPlayerState* s
     static int sStateLogCount = 0;
     if (sStateLogCount++ < 20)
     {
-        std::printf("[Server] PlayerState STORED P%d (conn %u): pos=(%.0f,%.0f,%.0f)\n",
-                    playerIndex, conn, state->pos_x, state->pos_y, state->pos_z);
+        LOG_SERVER_DEBUG("PlayerState STORED P{} (conn {}): pos=({:.0f},{:.0f},{:.0f})",
+                         playerIndex, conn, state->pos_x, state->pos_y, state->pos_z);
 
         // Verify it was stored
-        const auto& stored = room->getPlayerState(playerIndex);
-        std::printf("[Server] PlayerState VERIFY P%d: pos=(%.0f,%.0f,%.0f)\n",
-                    playerIndex, stored.pos_x, stored.pos_y, stored.pos_z);
+        [[maybe_unused]] const auto& stored = room->getPlayerState(playerIndex);
+        LOG_SERVER_DEBUG("PlayerState VERIFY P{}: pos=({:.0f},{:.0f},{:.0f})",
+                         playerIndex, stored.pos_x, stored.pos_y, stored.pos_z);
     }
 }
 
@@ -593,15 +665,15 @@ void Server::broadcastWorldStates()
         static int sValidBroadcastLogCount = 0;
         if (hasValidData && sValidBroadcastLogCount++ < 20)
         {
-            std::printf("[Server] Broadcasting WorldState WITH DATA: seq=%u, players=%d\n",
-                        world.sequence, (int)world.player_count);
-            for (int i = 0; i < (int)world.player_count; ++i)
+            LOG_SERVER_DEBUG("Broadcasting WorldState WITH DATA: seq={}, players={}",
+                             world.sequence, static_cast<int>(world.player_count));
+            for (int i = 0; i < static_cast<int>(world.player_count); ++i)
             {
-                std::printf("[Server]   P%d: pos=(%.0f,%.0f,%.0f)\n",
-                            world.players[i].player_num,
-                            world.players[i].pos_x,
-                            world.players[i].pos_y,
-                            world.players[i].pos_z);
+                LOG_SERVER_DEBUG("  P{}: pos=({:.0f},{:.0f},{:.0f})",
+                                 world.players[i].player_num,
+                                 world.players[i].pos_x,
+                                 world.players[i].pos_y,
+                                 world.players[i].pos_z);
             }
         }
 
@@ -611,7 +683,7 @@ void Server::broadcastWorldStates()
 
         if (msgSize == 0)
         {
-            std::printf("[Server] Failed to encode WorldState\n");
+            LOG_SERVER_ERROR("Failed to encode WorldState");
             continue;
         }
 
