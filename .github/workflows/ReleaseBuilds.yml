@@ -57,7 +57,7 @@ jobs:
 
       - run: echo "ARTIFACT_NAME=$(python3 build.py --print-artifact-name)" >> $GITHUB_ENV
       - run: python3 build.py --dependencies
-      - run: python3 build.py --configure
+      - run: python3 build.py --configure -- -DCMAKE_PREFIX_PATH="${{ github.workspace }}/gns-prebuilt"
       - run: python3 build.py --build
       - run: python3 build.py --package
       - uses: actions/upload-artifact@v4
@@ -95,7 +95,7 @@ jobs:
           $ARTIFACT_NAME = python3 build.py --print-artifact-name
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $env:GITHUB_ENV
       - run: python3 build.py --dependencies
-      - run: python3 build.py --configure -G 'Visual Studio 17 2022'
+      - run: python3 build.py --configure -G 'Visual Studio 17 2022' -- -DCMAKE_PREFIX_PATH="${{ github.workspace }}/gns-prebuilt"
       - run: python3 build.py --build
       - run: python3 build.py --package
       - uses: actions/upload-artifact@v4
@@ -134,7 +134,7 @@ jobs:
       - name: Get artifact name
         run: echo "ARTIFACT_NAME=$(python3 build.py --print-artifact-name)" >> $GITHUB_ENV
       - run: python3 build.py --dependencies
-      - run: python3 build.py --configure -G Xcode -DCMAKE_OSX_ARCHITECTURES=arm64
+      - run: python3 build.py --configure -G Xcode -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_PREFIX_PATH="${{ github.workspace }}/gns-prebuilt"
       - run: python3 build.py --build
       - run: python3 build.py --package
       - uses: actions/upload-artifact@v4
