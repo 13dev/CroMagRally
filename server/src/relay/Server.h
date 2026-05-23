@@ -71,6 +71,7 @@ private:
     std::array<Room, kMaxRooms> m_rooms;
     std::unordered_map<HSteamNetConnection, int> m_connectionToRoom;
     std::unordered_set<HSteamNetConnection> m_pendingConnections;
+    std::unordered_map<std::string, Room*> m_roomsByCode;  // O(1) room code lookup
 
     // World state sequence counter
     uint32_t m_worldSequence = 0;

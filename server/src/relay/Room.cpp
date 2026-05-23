@@ -134,10 +134,12 @@ bool Room::updatePlayerState(int playerIndex, const NetPlayerState& state)
         NetPlayerState correctedState = state;
         correctedState.player_num = static_cast<uint8_t>(playerIndex);
         m_playerStates[playerIndex] = correctedState;
+        m_dirty = true;
         return true;
     }
 
     m_playerStates[playerIndex] = state;
+    m_dirty = true;
     return true;
 }
 

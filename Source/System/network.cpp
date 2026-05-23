@@ -12,6 +12,7 @@
 
 // Standard library includes
 #include <string.h>
+#include <stdio.h>
 #include <math.h>
 
 // Include C++ headers from Pomme/SDL BEFORE the extern "C" block
@@ -30,21 +31,6 @@ extern "C" {
 
 // Shared network protocol (plain packed structs, no protobuf)
 #include "common/net_protocol.h"
-#include "common/log.h"
-
-//==============================================================================
-// COMPILE-TIME VALIDATION
-//==============================================================================
-
-// Ensure MAX_PLAYERS fits in uint8_t bitmask operations
-static_assert(MAX_PLAYERS <= 8, "Bitmask operations require MAX_PLAYERS <= 8");
-
-// Verify struct sizes match Backend_GNS.cpp expectations
-// If these fail, update the hardcoded sizes in Backend_GNS.cpp
-static_assert(sizeof(NetHostControlInfoMessageType) == 342,
-              "NetHostControlInfoMessageType size changed - update Backend_GNS.cpp");
-static_assert(sizeof(NetClientControlInfoMessageType) == 26,
-              "NetClientControlInfoMessageType size changed - update Backend_GNS.cpp");
 
 /**********************/
 /*     PROTOTYPES     */
@@ -62,44 +48,6 @@ static void OnWeaponEvent(const void* weaponEvent);  // Remote weapon event call
 
 // Reset function
 static void ResetNetworkState(void);
-
-// Player drop handling
-static void MarkPlayerDropped(int playerNum, const char* reason);
-static uint8_t CalculateExpectedSyncMask(void);
-
-//==============================================================================
-// BOUNDS VALIDATION HELPERS
-//==============================================================================
-
-// Safe bitmask operation with bounds checking
-static inline uint8_t PlayerBit(int playerNum)
-{
-    if (playerNum < 0 || playerNum >= MAX_PLAYERS)
-    {
-        LOG_NET_ERROR("Invalid playerNum {} in bitmask operation", playerNum);
-        return 0;
-    }
-    return (uint8_t)(1 << playerNum);
-}
-
-// Validate and clamp player number
-static inline bool ValidatePlayerNum(int playerNum, const char* context)
-{
-    if (playerNum < 0 || playerNum >= MAX_PLAYERS)
-    {
-        LOG_NET_ERROR("Invalid playerNum {} in {}", playerNum, context);
-        return false;
-    }
-    return true;
-}
-
-// Clamp lap number to valid array bounds
-static inline int ClampLapNum(int lap)
-{
-    if (lap < 0) return 0;
-    if (lap >= LAPS_PER_RACE) return LAPS_PER_RACE - 1;
-    return lap;
-}
 
 /****************************/
 /*    CONSTANTS             */
@@ -205,11 +153,6 @@ Boolean		gJoinNetworkGame = false;
 static NetHostControlInfoMessageType    gHostOutMess;
 static NetClientControlInfoMessageType  gClientOutMess;
 
-// Per-player status tracking (bitmasks for sync/ready state)
-static uint8_t                          gPlayerSyncBitmask = 0;      // Bit N = player N synced
-static uint8_t                          gPlayerReadyBitmask = 0;     // Bit N = player N chose vehicle
-static NetPlayerStatus                  gPlayerStatus[MAX_PLAYERS];
-
 // Pending received messages
 static bool                             gPendingConfigMessage = false;
 static NetConfigMessageType             gPendingConfig;
@@ -237,11 +180,12 @@ static char                             gNetworkStatusMessage[128] = "";
 
 void InitNetworkManager(void)
 {
-    LOG_NET_INFO("InitNetworkManager: Starting...");
-    LOG_NET_INFO("Struct sizes: HostControl={}, ClientControl={}, Config={}",
-                 sizeof(NetHostControlInfoMessageType),
-                 sizeof(NetClientControlInfoMessageType),
-                 sizeof(NetConfigMessageType));
+    printf("InitNetworkManager: Starting...\n");
+    printf("[NET] Struct sizes: HostControl=%zu, ClientControl=%zu, Config=%zu\n",
+           sizeof(NetHostControlInfoMessageType),
+           sizeof(NetClientControlInfoMessageType),
+           sizeof(NetConfigMessageType));
+    fflush(stdout);
 
     if (Net_Initialize())
     {
@@ -256,11 +200,13 @@ void InitNetworkManager(void)
         Net_SetWorldStateCallback(OnWorldState);  // Equal-players model
         Net_SetWeaponEventCallback(OnWeaponEvent);  // Weapon sync
 
-        LOG_NET_INFO("Network initialized successfully (GNS P2P)");
+        printf("InitNetworkManager: Network initialized successfully (GNS P2P)\n");
+        fflush(stdout);
     }
     else
     {
-        LOG_NET_ERROR("Failed to initialize network");
+        printf("InitNetworkManager: Failed to initialize network\n");
+        fflush(stdout);
         gNetSprocketInitialized = false;
     }
 }
@@ -300,7 +246,7 @@ void EndNetworkGame(void)
     ResetNetworkState();
     memset(gLastClientTime, 0, sizeof(gLastClientTime));
 
-    LOG_NET_INFO("Network game ended");
+    printf("EndNetworkGame: Network game ended\n");
 }
 
 
@@ -318,7 +264,7 @@ Boolean SetupNetworkHosting(void)
 {
     if (!gNetSprocketInitialized)
     {
-        LOG_NET_ERROR("SetupNetworkHosting: Network not initialized");
+        printf("SetupNetworkHosting: Network not initialized\n");
         return true;
     }
 
@@ -342,7 +288,7 @@ Boolean SetupNetworkHosting(void)
     // Create host and register with signaling server
     if (!Net_CreateHost(gLocalPlayerName))
     {
-        LOG_NET_ERROR("SetupNetworkHosting: Failed to create host - {}", Net_GetLastError());
+        printf("SetupNetworkHosting: Failed to create host - %s\n", Net_GetLastError());
         snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Failed: %s", Net_GetLastError());
         return true;
     }
@@ -356,7 +302,7 @@ Boolean SetupNetworkHosting(void)
     snprintf((char*)gPlayerNameStrings[0], sizeof(gPlayerNameStrings[0]), "%s", gLocalPlayerName);
 
     snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Connecting to server...");
-    LOG_NET_INFO("SetupNetworkHosting: Registering with signaling server");
+    printf("SetupNetworkHosting: Registering with signaling server\n");
     return false;  // Success
 }
 
@@ -372,13 +318,13 @@ Boolean SetupNetworkJoinWithRoomCode(const char* roomCode)
 {
     if (!gNetSprocketInitialized)
     {
-        LOG_NET_ERROR("SetupNetworkJoinWithRoomCode: Network not initialized");
+        printf("SetupNetworkJoinWithRoomCode: Network not initialized\n");
         return true;
     }
 
     if (!roomCode || strlen(roomCode) != NET_ROOM_CODE_LENGTH)
     {
-        LOG_NET_ERROR("SetupNetworkJoinWithRoomCode: Invalid room code '{}'", roomCode ? roomCode : "NULL");
+        printf("SetupNetworkJoinWithRoomCode: Invalid room code '%s'\n", roomCode ? roomCode : "NULL");
         return true;
     }
 
@@ -403,7 +349,7 @@ Boolean SetupNetworkJoinWithRoomCode(const char* roomCode)
     // Join the game
     if (!Net_JoinGame(roomCode, gLocalPlayerName))
     {
-        LOG_NET_ERROR("SetupNetworkJoinWithRoomCode: Failed to join - {}", Net_GetLastError());
+        printf("SetupNetworkJoinWithRoomCode: Failed to join - %s\n", Net_GetLastError());
         snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Failed: %s", Net_GetLastError());
         return true;
     }
@@ -412,7 +358,7 @@ Boolean SetupNetworkJoinWithRoomCode(const char* roomCode)
     gIsNetworkClient = true;
 
     snprintf(gNetworkStatusMessage, sizeof(gNetworkStatusMessage), "Joining room %s...", roomCode);
-    LOG_NET_INFO("SetupNetworkJoinWithRoomCode: Joining room {}", roomCode);
+    printf("SetupNetworkJoinWithRoomCode: Joining room %s\n", roomCode);
 
     return false;  // Success (connection initiated)
 }
@@ -489,7 +435,7 @@ static void OnStateChanged(NetConnectionState newState, const char* message)
             break;
     }
 
-    LOG_NET_INFO("OnStateChanged: {}", gNetworkStatusMessage);
+    printf("OnStateChanged: %s\n", gNetworkStatusMessage);
 }
 
 
@@ -500,7 +446,7 @@ static void OnPlayerName(int playerIndex, const char* name)
     if (playerIndex >= 0 && playerIndex < MAX_PLAYERS && name)
     {
         snprintf((char*)gPlayerNameStrings[playerIndex], sizeof(gPlayerNameStrings[0]), "%s", name);
-        LOG_NET_INFO("OnPlayerName: Player {} name set to: {}", playerIndex, name);
+        printf("OnPlayerName: Player %d name set to: %s\n", playerIndex, name);
     }
 }
 
@@ -522,14 +468,14 @@ static void OnClientConnected(int peerIndex)
             {
                 snprintf((char*)gPlayerNameStrings[playerNum], sizeof(gPlayerNameStrings[0]), "Player %d", playerNum + 1);
             }
-            LOG_NET_INFO("OnClientConnected: Player {} ({}) joined (total: {})",
-                         playerNum, reinterpret_cast<const char*>(gPlayerNameStrings[playerNum]), gNumGatheredPlayers);
+            printf("OnClientConnected: Player %d (%s) joined (total: %d)\n",
+                   playerNum, gPlayerNameStrings[playerNum], gNumGatheredPlayers);
         }
     }
     else
     {
         // We connected to a host
-        LOG_NET_INFO("OnClientConnected: Connected to host");
+        printf("OnClientConnected: Connected to host\n");
     }
 }
 
@@ -541,15 +487,12 @@ static void OnClientDisconnected(int peerIndex)
     if (gIsNetworkHost)
     {
         int playerNum = peerIndex;
-        LOG_NET_INFO("OnClientDisconnected: Player {} left", playerNum);
+        printf("OnClientDisconnected: Player %d left\n", playerNum);
 
-        // Clear player name from display list and sync/ready bits
-        if (ValidatePlayerNum(playerNum, "OnClientDisconnected"))
+        // Clear player name from display list
+        if (playerNum >= 0 && playerNum < MAX_PLAYERS)
         {
             gPlayerNameStrings[playerNum][0] = '\0';
-            gPlayerSyncBitmask &= ~PlayerBit(playerNum);
-            gPlayerReadyBitmask &= ~PlayerBit(playerNum);
-            gPlayerStatus[playerNum] = NetPlayerStatus::dropped;
         }
 
         PlayerUnexpectedlyLeavesGame(playerNum);
@@ -558,7 +501,7 @@ static void OnClientDisconnected(int peerIndex)
     else
     {
         // Lost connection to host
-        LOG_NET_WARN("OnClientDisconnected: Lost connection to host");
+        printf("OnClientDisconnected: Lost connection to host\n");
         gGameOver = true;
     }
 }
@@ -586,38 +529,32 @@ static void HandleNetworkMessage(int fromPeer, const void* data, size_t size)
     switch (header->msgType)
     {
         case kNetMsgType_Config:
-            LOG_NET_DEBUG("Received CONFIG message: payloadSize={}, expected={}", payloadSize, sizeof(NetConfigMessageType));
+            printf("[NET] Received CONFIG message: payloadSize=%zu, expected=%zu\n",
+                   payloadSize, sizeof(NetConfigMessageType));
             if (payloadSize >= sizeof(NetConfigMessageType))
             {
                 memcpy(&gPendingConfig, payload, sizeof(NetConfigMessageType));
                 gPendingConfigMessage = true;
-                LOG_NET_INFO("CONFIG accepted: gameMode={}, playerNum={}, numPlayers={}",
-                             gPendingConfig.gameMode, gPendingConfig.playerNum, gPendingConfig.numPlayers);
+                printf("[NET] CONFIG accepted: gameMode=%d, playerNum=%d, numPlayers=%d\n",
+                       gPendingConfig.gameMode, gPendingConfig.playerNum, gPendingConfig.numPlayers);
             }
             else
             {
-                LOG_NET_WARN("CONFIG REJECTED: payload too small!");
+                printf("[NET] CONFIG REJECTED: payload too small!\n");
             }
             break;
 
         case kNetMsgType_Sync:
             if (payloadSize >= sizeof(NetSyncMessageType))
             {
-                const NetSyncMessageType* syncMsg = (const NetSyncMessageType*)payload;
-                int playerNum = syncMsg->playerNum;
-
-                if (ValidatePlayerNum(playerNum, "kNetMsgType_Sync"))
-                {
-                    gPlayerSyncBitmask |= PlayerBit(playerNum);
-                    LOG_NET_INFO("Player {} synced (syncBitmask=0x{:02X})", playerNum, gPlayerSyncBitmask);
-                }
                 gSyncCount++;
                 gPendingSyncMessage = true;
             }
             break;
 
         case kNetMsgType_HostControl:
-            LOG_NET_DEBUG("Received HOST_CONTROL: payloadSize={}, expected={}", payloadSize, sizeof(NetHostControlInfoMessageType));
+            printf("[NET] Received HOST_CONTROL: payloadSize=%zu, expected=%zu\n",
+                   payloadSize, sizeof(NetHostControlInfoMessageType));
             if (payloadSize >= sizeof(NetHostControlInfoMessageType))
             {
                 memcpy(&gPendingHostControl, payload, sizeof(NetHostControlInfoMessageType));
@@ -648,13 +585,14 @@ static void HandleNetworkMessage(int fromPeer, const void* data, size_t size)
             break;
 
         case kNetMsgType_ClientControl:
-            LOG_NET_DEBUG("HOST received CLIENT_CONTROL: payloadSize={}, expected={}", payloadSize, sizeof(NetClientControlInfoMessageType));
+            printf("[NET] HOST received CLIENT_CONTROL: payloadSize=%zu, expected=%zu\n",
+                   payloadSize, sizeof(NetClientControlInfoMessageType));
             if (payloadSize >= sizeof(NetClientControlInfoMessageType))
             {
                 NetClientControlInfoMessageType msg;
                 memcpy(&msg, payload, sizeof(msg));
                 int playerNum = msg.playerNum;
-                LOG_NET_DEBUG("  playerNum={}, controlBits=0x{:x}", playerNum, msg.controlBits);
+                printf("[NET]   playerNum=%d, controlBits=0x%x\n", playerNum, msg.controlBits);
                 if (playerNum >= 0 && playerNum < MAX_PLAYERS)
                 {
                     memcpy(&gPendingClientControl[playerNum], &msg, sizeof(msg));
@@ -669,16 +607,10 @@ static void HandleNetworkMessage(int fromPeer, const void* data, size_t size)
                 NetPlayerCharTypeMessage msg;
                 memcpy(&msg, payload, sizeof(msg));
                 int playerNum = msg.playerNum;
-                if (ValidatePlayerNum(playerNum, "kNetMsgType_VehicleType"))
+                if (playerNum >= 0 && playerNum < MAX_PLAYERS)
                 {
                     memcpy(&gPendingVehicleType[playerNum], &msg, sizeof(msg));
                     gPendingVehicleTypeMessage[playerNum] = true;
-
-                    // Mark player as READY (chose their vehicle)
-                    gPlayerReadyBitmask |= PlayerBit(playerNum);
-                    gPlayerStatus[playerNum] = NetPlayerStatus::ready;
-
-                    LOG_NET_INFO("Player {} chose vehicle (readyBitmask=0x{:02X})", playerNum, gPlayerReadyBitmask);
                 }
             }
             break;
@@ -688,7 +620,7 @@ static void HandleNetworkMessage(int fromPeer, const void* data, size_t size)
             break;
 
         default:
-            LOG_NET_WARN("HandleNetworkMessage: Unknown message type {}", header->msgType);
+            printf("HandleNetworkMessage: Unknown message type %d\n", header->msgType);
             break;
     }
 }
@@ -745,7 +677,9 @@ void HostSendGameConfig(void)
     int expectedClients = gNumGatheredPlayers - 1;  // Excluding host
     int connectedClients = Net_GetP2PConnectionCount();
 
-    LOG_NET_INFO("HostSendGameConfig: Starting game with {}/{} P2P connections", connectedClients, expectedClients);
+    printf("HostSendGameConfig: Starting game with %d/%d P2P connections\n",
+           connectedClients, expectedClients);
+    fflush(stdout);
 
     // Notify signaling server that game is starting
     Net_StartGame();
@@ -756,7 +690,9 @@ void HostSendGameConfig(void)
     {
         uint32_t startTick = SDL_GetTicks();
         int lastReportedCount = connectedClients;
-        LOG_NET_INFO("HostSendGameConfig: Waiting for P2P connections ({}/{})...", connectedClients, expectedClients);
+        printf("HostSendGameConfig: Waiting for P2P connections (%d/%d)...\n",
+               connectedClients, expectedClients);
+        fflush(stdout);
 
         while (connectedClients < expectedClients && (SDL_GetTicks() - startTick) < 15000)
         {
@@ -765,7 +701,8 @@ void HostSendGameConfig(void)
             int newCount = Net_GetP2PConnectionCount();
             if (newCount != lastReportedCount)
             {
-                LOG_NET_INFO("HostSendGameConfig: P2P connections: {}/{}", newCount, expectedClients);
+                printf("HostSendGameConfig: P2P connections: %d/%d\n", newCount, expectedClients);
+                fflush(stdout);
                 lastReportedCount = newCount;
             }
             connectedClients = newCount;
@@ -773,11 +710,14 @@ void HostSendGameConfig(void)
 
         if (connectedClients < expectedClients)
         {
-            LOG_NET_WARN("HostSendGameConfig: Only {}/{} clients connected after 15s", connectedClients, expectedClients);
+            printf("HostSendGameConfig: Warning: Only %d/%d clients connected after 15s\n",
+                   connectedClients, expectedClients);
+            fflush(stdout);
         }
     }
 
-    LOG_NET_INFO("HostSendGameConfig: Proceeding with {} connected clients", connectedClients);
+    printf("HostSendGameConfig: Proceeding with %d connected clients\n", connectedClients);
+    fflush(stdout);
 
     // Small delay to ensure connections are stable
     SDL_Delay(100);
@@ -795,13 +735,13 @@ void HostSendGameConfig(void)
                        gGamePrefs.tournamentProgression.numTracksCompleted,
                        gGamePrefs.difficulty,
                        gGamePrefs.tagDuration);
-        LOG_NET_DEBUG("HostSendGameConfig: Sent config to player {}", i);
+        printf("HostSendGameConfig: Sent config to player %d\n", i);
     }
 
     gNumRealPlayers = gNumGatheredPlayers;
     gNetGameInProgress = true;
 
-    LOG_NET_INFO("HostSendGameConfig: Sent config to {} clients", gNumGatheredPlayers - 1);
+    printf("HostSendGameConfig: Sent config to %d clients\n", gNumGatheredPlayers - 1);
 }
 
 
@@ -820,28 +760,12 @@ Boolean ClientWaitForConfig(void)
 
     if (gPendingConfigMessage)
     {
-        // Validate numPlayers before using
-        int receivedNumPlayers = gPendingConfig.numPlayers;
-        if (receivedNumPlayers < 1 || receivedNumPlayers > MAX_PLAYERS)
-        {
-            LOG_NET_WARN("Invalid numPlayers {} in config, clamping", receivedNumPlayers);
-            receivedNumPlayers = (receivedNumPlayers < 1) ? 1 : MAX_PLAYERS;
-        }
-
-        // Validate playerNum
-        int receivedPlayerNum = gPendingConfig.playerNum;
-        if (receivedPlayerNum < 0 || receivedPlayerNum >= MAX_PLAYERS)
-        {
-            LOG_NET_WARN("Invalid playerNum {} in config", receivedPlayerNum);
-            receivedPlayerNum = 1;  // Default to player 1 for clients
-        }
-
         // Apply configuration
         gGameMode               = gPendingConfig.gameMode;
         gTheAge                 = gPendingConfig.age;
         gTrackNum               = gPendingConfig.trackNum;
-        gNumRealPlayers         = receivedNumPlayers;
-        gMyNetworkPlayerNum     = receivedPlayerNum;
+        gNumRealPlayers         = gPendingConfig.numPlayers;
+        gMyNetworkPlayerNum     = gPendingConfig.playerNum;
         gGamePrefs.difficulty   = gPendingConfig.difficulty;
         gGamePrefs.tagDuration  = gPendingConfig.tagDuration;
 
@@ -852,7 +776,8 @@ Boolean ClientWaitForConfig(void)
         gPendingConfigMessage = false;
         gNetGameInProgress = true;
 
-        LOG_NET_INFO("ClientWaitForConfig: Received config - player {} of {}", gMyNetworkPlayerNum, gNumRealPlayers);
+        printf("ClientWaitForConfig: Received config - player %d of %d\n",
+               gMyNetworkPlayerNum, gNumRealPlayers);
         return true;
     }
 
@@ -874,74 +799,52 @@ void HostWaitForPlayersToPrepareLevel(void)
     if (!gIsNetworkHost)
         return;
 
-    LOG_NET_INFO("HostWaitForPlayersToPrepareLevel: Waiting for {} clients (gNumRealPlayers={})...",
-                 gNumRealPlayers - 1, gNumRealPlayers);
+    printf("HostWaitForPlayersToPrepareLevel: Waiting for %d clients (gNumRealPlayers=%d)...\n",
+           gNumRealPlayers - 1, gNumRealPlayers);
+    fflush(stdout);
 
-    // Reset sync - host (player 0) is already ready
-    gPlayerSyncBitmask = PlayerBit(0);
+    // Reset sync state at the start
     gSyncCount = 0;
     gPendingSyncMessage = false;
 
-    // Expected: bits 0..(gNumRealPlayers-1) set
-    uint8_t expectedMask = CalculateExpectedSyncMask();
-
-    LOG_NET_INFO("HostWait: Expecting syncMask=0x{:02X} ({} players)", expectedMask, gNumRealPlayers);
-
+    int syncedPlayers = 1;  // Host is already ready
     uint32_t startTick = SDL_GetTicks();
     uint32_t lastPrint = 0;
 
-    while (gPlayerSyncBitmask != expectedMask)
+    while (syncedPlayers < gNumRealPlayers)
     {
         Net_ProcessEvents(10);
+
+        if (gPendingSyncMessage)
+        {
+            printf("HostWaitForPlayersToPrepareLevel: Got sync message! gSyncCount=%d\n", gSyncCount);
+            fflush(stdout);
+            syncedPlayers = gSyncCount + 1;
+            gPendingSyncMessage = false;
+        }
 
         // Print status every 2 seconds
         uint32_t now = SDL_GetTicks();
         if (now - lastPrint > 2000)
         {
-            LOG_NET_DEBUG("HostWait: syncMask=0x{:02X}, expected=0x{:02X}", gPlayerSyncBitmask, expectedMask);
-            for (int i = 0; i < gNumRealPlayers; i++)
-            {
-                [[maybe_unused]] bool synced = (gPlayerSyncBitmask & PlayerBit(i)) != 0;
-                LOG_NET_DEBUG("  Player {}: {}", i, synced ? "SYNCED" : "waiting...");
-            }
+            printf("HostWaitForPlayersToPrepareLevel: Still waiting... syncedPlayers=%d/%d\n",
+                   syncedPlayers, gNumRealPlayers);
+            fflush(stdout);
             lastPrint = now;
         }
 
-        // Timeout after 2 minutes - graceful degradation instead of fatal
+        // Timeout after 2 minutes
         if ((SDL_GetTicks() - startTick) > (60 * 1000 * 2))
         {
-            LOG_NET_WARN("TIMEOUT: Not all players synced in time");
-            for (int i = 0; i < gNumRealPlayers; i++)
-            {
-                if (!(gPlayerSyncBitmask & PlayerBit(i)))
-                {
-                    LOG_NET_WARN("Dropping player {} (sync timeout)", i);
-                    MarkPlayerDropped(i, "Sync timeout");
-                }
-            }
-
-            // Recalculate expected mask with remaining players
-            expectedMask = CalculateExpectedSyncMask();
-
-            // If not enough players remain, abort gracefully
-            int remainingPlayers = __builtin_popcount(expectedMask);
-            if (remainingPlayers < 1)
-            {
-                LOG_NET_ERROR("Not enough players remaining, ending game");
-                gGameOver = true;
-                return;
-            }
-
-            // Reset timeout for remaining players
-            startTick = SDL_GetTicks();
+            DoFatalAlert("No response from other player(s), something has gone wrong.");
         }
     }
 
-    // Tell all clients we're ready (GO signal) using typed API
+    // Tell all clients we're ready using typed API
     Net_SendSync(0);
 
-    LOG_NET_INFO("HostWait: All synced! (0x{:02X})", gPlayerSyncBitmask);
     gSyncCount = 0;
+    printf("HostWaitForPlayersToPrepareLevel: All players ready!\n");
 }
 
 
@@ -955,12 +858,14 @@ void ClientTellHostLevelIsPrepared(void)
     if (!gIsNetworkClient)
         return;
 
-    LOG_NET_INFO("ClientTellHostLevelIsPrepared: Preparing to send sync (playerNum={})...", gMyNetworkPlayerNum);
+    printf("ClientTellHostLevelIsPrepared: Preparing to send sync (playerNum=%d)...\n", gMyNetworkPlayerNum);
+    fflush(stdout);
 
     // Tell host we're ready using typed API
     Net_SendSync(gMyNetworkPlayerNum);
 
-    LOG_NET_INFO("ClientTellHostLevelIsPrepared: Sent sync message to host, waiting for GO signal...");
+    printf("ClientTellHostLevelIsPrepared: Sent sync message to host, waiting for GO signal...\n");
+    fflush(stdout);
 
     // Wait for host's ready signal
     gPendingSyncMessage = false;
@@ -975,21 +880,21 @@ void ClientTellHostLevelIsPrepared(void)
         uint32_t now = SDL_GetTicks();
         if (now - lastPrint > 2000)
         {
-            LOG_NET_DEBUG("ClientTellHostLevelIsPrepared: Still waiting for GO signal...");
+            printf("ClientTellHostLevelIsPrepared: Still waiting for GO signal...\n");
+            fflush(stdout);
             lastPrint = now;
         }
 
-        // Timeout after 2 minutes - graceful abort instead of fatal
+        // Timeout after 2 minutes
         if ((SDL_GetTicks() - startTick) > (60 * 1000 * 2))
         {
-            LOG_NET_ERROR("Timeout waiting for host GO signal");
-            gGameOver = true;
-            return;
+            DoFatalAlert("ClientTellHostLevelIsPrepared: Timeout waiting for host GO signal.");
         }
     }
     gPendingSyncMessage = false;
 
-    LOG_NET_INFO("ClientTellHostLevelIsPrepared: Host says GO!");
+    printf("ClientTellHostLevelIsPrepared: Host says GO!\n");
+    fflush(stdout);
 }
 
 
@@ -1007,7 +912,7 @@ void HostSend_ControlInfoToClients(void)
         return;
 
     // Build message struct directly (typed API handles serialization)
-    NetHostControlInfoMessageType msg = {};
+    NetHostControlInfoMessageType msg = {0};
 
     // Timestamp for clock sync
     msg.hostTimeMs = SDL_GetTicks();
@@ -1054,7 +959,9 @@ void HostSend_ControlInfoToClients(void)
 
         // Race state sync
         msg.lapNum[i] = (int8_t)gPlayerInfo[i].lapNum;
-        int lap = ClampLapNum(gPlayerInfo[i].lapNum);
+        int lap = gPlayerInfo[i].lapNum;
+        if (lap < 0) lap = 0;
+        if (lap >= LAPS_PER_RACE) lap = LAPS_PER_RACE - 1;
         msg.currentLapTime[i] = gPlayerInfo[i].lapTimes[lap];
     }
 
@@ -1065,8 +972,8 @@ void HostSend_ControlInfoToClients(void)
     static int sSendCount = 0;
     if (sSendCount++ < 10)
     {
-        LOG_NET_DEBUG("HOST sending control: player0 pos=({:.1f},{:.1f},{:.1f}) structSize={}",
-                      msg.posX[0], msg.posY[0], msg.posZ[0], sizeof(msg));
+        printf("[NET] HOST sending control: player0 pos=(%.1f,%.1f,%.1f) structSize=%zu\n",
+               msg.posX[0], msg.posY[0], msg.posZ[0], sizeof(msg));
     }
 
     // Send using typed API (no struct padding issues)
@@ -1104,7 +1011,7 @@ void ClientReceive_ControlInfoFromHost(void)
             }
             if (!gPendingHostControlMessage)
             {
-                LOG_NET_ERROR("ClientReceive_ControlInfoFromHost: Timeout waiting for initial host data");
+                printf("ClientReceive_ControlInfoFromHost: Timeout waiting for initial host data\n");
                 gGameOver = true;
                 return;
             }
@@ -1170,7 +1077,9 @@ void ClientReceive_ControlInfoFromHost(void)
 
         // Sync race state for ALL players from host (host is authoritative)
         gPlayerInfo[i].lapNum = mess->lapNum[i];
-        int lap = ClampLapNum(mess->lapNum[i]);
+        int lap = mess->lapNum[i];
+        if (lap < 0) lap = 0;
+        if (lap >= LAPS_PER_RACE) lap = LAPS_PER_RACE - 1;
         gPlayerInfo[i].lapTimes[lap] = mess->currentLapTime[i];
     }
 
@@ -1191,112 +1100,10 @@ void ClientReceive_ControlInfoFromHost(void)
 // Reset network state (call on game start/end)
 static void ResetNetworkState(void)
 {
-    // RTT/Stats
     gEstimatedRTT = 0;
     gPacketsReceivedWindow = 0;
     gStatsWindowStartTime = 0;
     gLastPacketDeliveryPct = 100;
-
-    // Sync/Ready tracking
-    gPlayerSyncBitmask = 0;
-    gPlayerReadyBitmask = 0;
-    for (int i = 0; i < MAX_PLAYERS; i++)
-        gPlayerStatus[i] = NetPlayerStatus::disconnected;
-
-    // Pending messages - clear ALL
-    gPendingConfigMessage = false;
-    gPendingSyncMessage = false;
-    gPendingHostControlMessage = false;
-    gSyncCount = 0;
-
-    for (int i = 0; i < MAX_PLAYERS; i++)
-    {
-        gPendingClientControlMessage[i] = false;
-        gPendingVehicleTypeMessage[i] = false;
-    }
-
-    // World state
-    gHasWorldStateData = false;
-    gReceivedNewWorldStateThisFrame = false;
-    memset(&gCachedWorldState, 0, sizeof(gCachedWorldState));
-
-    // Host position cache
-    gHasHostPositionData = false;
-    memset(&gCachedHostPositions, 0, sizeof(gCachedHostPositions));
-
-    // Frame counters
-    gHostSendCounter = 0;
-    memset(gClientSendCounter, 0, sizeof(gClientSendCounter));
-
-    // Timing
-    gLastNetSendTime = 0;
-    gHasReceivedInitialHostData = false;
-
-    LOG_NET_INFO("Network state fully reset");
-}
-
-
-/********************* MARK PLAYER DROPPED *******************************/
-//
-// Mark a player as dropped and clean up their state.
-// Handles graceful recovery when a player disconnects mid-game.
-//
-
-static void MarkPlayerDropped(int playerNum, const char* reason)
-{
-    if (!ValidatePlayerNum(playerNum, "MarkPlayerDropped"))
-        return;
-
-    LOG_NET_WARN("Player {} dropped: {}", playerNum, reason);
-
-    // Clear tracking bits
-    gPlayerSyncBitmask &= ~PlayerBit(playerNum);
-    gPlayerReadyBitmask &= ~PlayerBit(playerNum);
-    gPlayerStatus[playerNum] = NetPlayerStatus::dropped;
-
-    // Clear pending messages for this player
-    gPendingVehicleTypeMessage[playerNum] = false;
-    gPendingClientControlMessage[playerNum] = false;
-
-    // Convert to CPU player if in-game
-    if (gNetGameInProgress)
-    {
-        gPlayerInfo[playerNum].isComputer = true;
-        gPlayerInfo[playerNum].isEliminated = true;
-    }
-
-    // Update player counts
-    if (gNumRealPlayers > 0)
-        gNumRealPlayers--;
-    if (gNumGatheredPlayers > 0)
-        gNumGatheredPlayers--;
-}
-
-
-/********************* CALCULATE EXPECTED SYNC MASK *******************************/
-//
-// Calculate expected sync bitmask based on active (non-dropped) players.
-//
-
-static uint8_t CalculateExpectedSyncMask(void)
-{
-    uint8_t mask = 0;
-    for (int i = 0; i < gNumRealPlayers && i < MAX_PLAYERS; i++)
-    {
-        if (gPlayerStatus[i] != NetPlayerStatus::disconnected &&
-            gPlayerStatus[i] != NetPlayerStatus::dropped)
-        {
-            mask |= PlayerBit(i);
-        }
-    }
-
-    // If no valid status tracking yet, fall back to simple calculation
-    if (mask == 0 && gNumRealPlayers > 0)
-    {
-        mask = (uint8_t)((1 << gNumRealPlayers) - 1);
-    }
-
-    return mask;
 }
 
 /************** CLIENT APPLY HOST POSITIONS *********************/
@@ -1327,13 +1134,13 @@ void ClientApplyHostPositions(void)
     if (!gIsNetworkClient)
     {
         if (sLogCounter++ < 5)
-            LOG_NET_DEBUG("ClientApplyHostPositions: Not a client (gIsNetworkClient={})", gIsNetworkClient);
+            printf("[NET] ClientApplyHostPositions: Not a client (gIsNetworkClient=%d)\n", gIsNetworkClient);
         return;
     }
     if (!gHasHostPositionData)
     {
         if (sLogCounter++ < 60)
-            LOG_NET_DEBUG("ClientApplyHostPositions: No host position data yet");
+            printf("[NET] ClientApplyHostPositions: No host position data yet\n");
         return;
     }
 
@@ -1341,22 +1148,19 @@ void ClientApplyHostPositions(void)
     static int sApplyLogCount = 0;
     if (sApplyLogCount++ < 20)
     {
-        LOG_NET_DEBUG("ClientApply: myPlayer={}, numPlayers={}", gMyNetworkPlayerNum, gNumRealPlayers);
+        printf("[NET] ClientApply: myPlayer=%d, numPlayers=%d\n",
+               gMyNetworkPlayerNum, gNumRealPlayers);
         for (int i = 0; i < gNumRealPlayers; i++)
         {
             ObjNode* car = gPlayerInfo[i].objNode;
+            printf("[NET]   P%d: obj=%p, cached=(%.0f,%.0f,%.0f)",
+                   i, (void*)car,
+                   gCachedHostPositions.posX[i],
+                   gCachedHostPositions.posY[i],
+                   gCachedHostPositions.posZ[i]);
             if (car)
-            {
-                LOG_NET_DEBUG("  P{}: obj={}, cached=({:.0f},{:.0f},{:.0f}) cur=({:.0f},{:.0f},{:.0f})",
-                              i, static_cast<void*>(car),
-                              gCachedHostPositions.posX[i], gCachedHostPositions.posY[i], gCachedHostPositions.posZ[i],
-                              car->Coord.x, car->Coord.y, car->Coord.z);
-            }
-            else
-            {
-                LOG_NET_DEBUG("  P{}: obj=null, cached=({:.0f},{:.0f},{:.0f})",
-                              i, gCachedHostPositions.posX[i], gCachedHostPositions.posY[i], gCachedHostPositions.posZ[i]);
-            }
+                printf(" cur=(%.0f,%.0f,%.0f)", car->Coord.x, car->Coord.y, car->Coord.z);
+            printf("\n");
         }
     }
 
@@ -1476,7 +1280,7 @@ void ClientSend_ControlInfoToHost(void)
         return;
 
     // Build message struct directly (typed API handles serialization)
-    NetClientControlInfoMessageType msg = {};
+    NetClientControlInfoMessageType msg = {0};
 
     // Timestamp for RTT calculation
     msg.clientTimeMs = SDL_GetTicks();
@@ -1495,8 +1299,8 @@ void ClientSend_ControlInfoToHost(void)
     static int sSendCount = 0;
     if (sSendCount++ < 10)
     {
-        LOG_NET_DEBUG("CLIENT sending control: player={}, bits=0x{:x}, structSize={}",
-                      msg.playerNum, msg.controlBits, sizeof(msg));
+        printf("[NET] CLIENT sending control: player=%d, bits=0x%x, structSize=%zu\n",
+               msg.playerNum, msg.controlBits, sizeof(msg));
     }
 
     // Send using typed API (no struct padding issues)
@@ -1584,7 +1388,8 @@ void GetVehicleSelectionFromNetPlayers(void)
     // NOTE: Do NOT clear pending vehicle messages here!
     // Messages may have arrived while we were in character/vehicle select screens.
 
-    LOG_NET_INFO("GetVehicleSelectionFromNetPlayers: Waiting for {} other players", gNumRealPlayers - 1);
+    printf("GetVehicleSelectionFromNetPlayers: Waiting for %d other players\n", gNumRealPlayers - 1);
+    fflush(stdout);
 
     /*****************************/
     /* SET UP SIMPLE WAIT SCREEN */
@@ -1599,10 +1404,12 @@ void GetVehicleSelectionFromNetPlayers(void)
     OGL_SetupGameView(&viewDef);
 
     // Create waiting message text
-    NewObjectDefinitionType textDef = {};
-    textDef.slot = SPRITE_SLOT;
-    textDef.coord = {0, 50, 0};
-    textDef.scale = 0.4f;
+    NewObjectDefinitionType textDef =
+    {
+        .slot = SPRITE_SLOT,
+        .coord = {0, 50, 0},
+        .scale = 0.4f,
+    };
     ObjNode* waitText = TextMesh_New(Localize(STR_WAITING_FOR_PLAYERS), kTextMeshAlignCenter, &textDef);
     waitText->ColorFilter = OGLColorRGBA{1, 1, 1, 1};
 
@@ -1641,7 +1448,9 @@ void GetVehicleSelectionFromNetPlayers(void)
                 gPendingVehicleTypeMessage[i] = false;
                 count++;
 
-                LOG_NET_INFO("GetVehicleSelectionFromNetPlayers: Player {} chose vehicle {}", i, msg->vehicleType);
+                printf("GetVehicleSelectionFromNetPlayers: Player %d chose vehicle %d\n",
+                       i, msg->vehicleType);
+                fflush(stdout);
             }
         }
 
@@ -1654,39 +1463,18 @@ void GetVehicleSelectionFromNetPlayers(void)
         uint32_t now = SDL_GetTicks();
         if (now - lastPrint > 2000)
         {
-            LOG_NET_DEBUG("GetVehicleSelectionFromNetPlayers: Still waiting... got {}/{}", count, gNumRealPlayers);
+            printf("GetVehicleSelectionFromNetPlayers: Still waiting... got %d/%d\n",
+                   count, gNumRealPlayers);
+            fflush(stdout);
             lastPrint = now;
         }
 
-        // Timeout after 2 minutes - graceful degradation instead of fatal
+        // Timeout after 2 minutes
         if ((SDL_GetTicks() - startTick) > (60 * 1000 * 2))
         {
-            LOG_NET_WARN("TIMEOUT: Not all players selected vehicles");
-
-            // Mark missing players as dropped
-            for (int j = 0; j < gNumRealPlayers; j++)
-            {
-                if (j == gMyNetworkPlayerNum)
-                    continue;
-                if (!gPendingVehicleTypeMessage[j])
-                {
-                    LOG_NET_WARN("Dropping player {} (vehicle selection timeout)", j);
-                    MarkPlayerDropped(j, "Vehicle selection timeout");
-                }
-            }
-
-            // If not enough players remain, abort
-            if (gNumRealPlayers < 2)
-            {
-                LOG_NET_ERROR("Not enough players remaining");
-                DeleteAllObjects();
-                OGL_DisposeGameView();
-                gGameOver = true;
-                return;
-            }
-
-            // Otherwise continue with players who are ready
-            break;
+            DeleteAllObjects();
+            OGL_DisposeGameView();
+            DoFatalAlert("GetVehicleSelectionFromNetPlayers: Timeout waiting for other players.");
         }
 
         // Draw the waiting screen
@@ -1702,7 +1490,8 @@ void GetVehicleSelectionFromNetPlayers(void)
     DeleteAllObjects();
     OGL_DisposeGameView();
 
-    LOG_NET_INFO("GetVehicleSelectionFromNetPlayers: Got all vehicle selections!");
+    printf("GetVehicleSelectionFromNetPlayers: Got all vehicle selections!\n");
+    fflush(stdout);
 }
 
 
@@ -1734,7 +1523,7 @@ static void PlayerUnexpectedlyLeavesGame(int playerIndex)
             break;
     }
 
-    LOG_NET_INFO("PlayerUnexpectedlyLeavesGame: Player {} left, converted to CPU", playerIndex);
+    printf("PlayerUnexpectedlyLeavesGame: Player %d left, converted to CPU\n", playerIndex);
 }
 
 
@@ -1867,15 +1656,15 @@ static void OnWorldState(const void* worldState)
     static int sWorldLogCount = 0;
     if (sWorldLogCount++ < 30)
     {
-        LOG_NET_DEBUG("OnWorldState: seq={}, players={}",
-                      gCachedWorldState.sequence, static_cast<int>(gCachedWorldState.player_count));
-        for (int j = 0; j < static_cast<int>(gCachedWorldState.player_count); j++)
+        printf("[NET] OnWorldState: seq=%u, players=%d\n",
+               gCachedWorldState.sequence, (int)gCachedWorldState.player_count);
+        for (int j = 0; j < (int)gCachedWorldState.player_count; j++)
         {
-            LOG_NET_DEBUG("  Recv P{}: pos=({:.0f},{:.0f},{:.0f})",
-                          gCachedWorldState.players[j].player_num,
-                          gCachedWorldState.players[j].pos_x,
-                          gCachedWorldState.players[j].pos_y,
-                          gCachedWorldState.players[j].pos_z);
+            printf("[NET]   Recv P%d: pos=(%.0f,%.0f,%.0f)\n",
+                   gCachedWorldState.players[j].player_num,
+                   gCachedWorldState.players[j].pos_x,
+                   gCachedWorldState.players[j].pos_y,
+                   gCachedWorldState.players[j].pos_z);
         }
     }
 }
@@ -1907,7 +1696,7 @@ void SendPlayerState(void)
     }
 
     // Build the packed player state message
-    NetPlayerState state = {};
+    NetPlayerState state = {0};
     state.player_num = gMyNetworkPlayerNum;
     uint32_t seq = gIsNetworkHost ? gHostSendCounter++ : gClientSendCounter[gMyNetworkPlayerNum]++;
     state.sequence = seq;
@@ -1929,15 +1718,17 @@ void SendPlayerState(void)
     state.steering = gPlayerInfo[gMyNetworkPlayerNum].steering;
     state.lap_num = gPlayerInfo[gMyNetworkPlayerNum].lapNum;
 
-    int lap = ClampLapNum(gPlayerInfo[gMyNetworkPlayerNum].lapNum);
+    int lap = gPlayerInfo[gMyNetworkPlayerNum].lapNum;
+    if (lap < 0) lap = 0;
+    if (lap >= LAPS_PER_RACE) lap = LAPS_PER_RACE - 1;
     state.lap_time_ms = gPlayerInfo[gMyNetworkPlayerNum].lapTimes[lap];
 
     // Debug log (limit spam)
     static int sSendLogCount = 0;
     if (sSendLogCount++ < 30)
     {
-        LOG_NET_DEBUG("SendPlayerState: P{} pos=({:.0f},{:.0f},{:.0f}) ctrl=0x{:x}",
-                      gMyNetworkPlayerNum, state.pos_x, state.pos_y, state.pos_z, state.control_bits);
+        printf("[NET] SendPlayerState: P%d pos=(%.0f,%.0f,%.0f) ctrl=0x%x\n",
+               gMyNetworkPlayerNum, state.pos_x, state.pos_y, state.pos_z, state.control_bits);
     }
 
     Net_SendPlayerState(&state);
@@ -2016,8 +1807,9 @@ void ApplyWorldState(void)
         static int sApplyLogCount = 0;
         if (sApplyLogCount++ < 30)
         {
-            LOG_NET_DEBUG("Apply P{} (remote): target=({:.0f},{:.0f},{:.0f}) car=({:.0f},{:.0f},{:.0f})",
-                          playerNum, targetX, targetY, targetZ, car->Coord.x, car->Coord.y, car->Coord.z);
+            printf("[NET] Apply P%d (remote): target=(%.0f,%.0f,%.0f) car=(%.0f,%.0f,%.0f)\n",
+                   playerNum, targetX, targetY, targetZ,
+                   car->Coord.x, car->Coord.y, car->Coord.z);
         }
 
         car->Coord.x += (targetX - car->Coord.x) * smoothing;
@@ -2033,7 +1825,9 @@ void ApplyWorldState(void)
 
         // Sync race state
         gPlayerInfo[playerNum].lapNum = ps->lap_num;
-        int lap = ClampLapNum(ps->lap_num);
+        int lap = ps->lap_num;
+        if (lap < 0) lap = 0;
+        if (lap >= LAPS_PER_RACE) lap = LAPS_PER_RACE - 1;
         gPlayerInfo[playerNum].lapTimes[lap] = ps->lap_time_ms;
     }
 
@@ -2068,27 +1862,6 @@ void NetTick_EqualPlayers(void)
         GetLocalKeyState();
         SendPlayerState();
     }
-}
-
-
-#pragma mark - Player Ready State
-
-
-/********************* NET PLAYER READY FUNCTIONS *******************************/
-//
-// Check if a player has selected their vehicle (is ready to start)
-//
-
-Boolean Net_IsPlayerReady(int playerNum)
-{
-    if (!ValidatePlayerNum(playerNum, "Net_IsPlayerReady"))
-        return false;
-    return (gPlayerReadyBitmask & PlayerBit(playerNum)) != 0;
-}
-
-int Net_GetReadyPlayerCount(void)
-{
-    return __builtin_popcount(gPlayerReadyBitmask);
 }
 
 
@@ -2153,7 +1926,7 @@ void Net_DumpDiagnosticReport(void)
     FILE* f = fopen("network_diag.txt", "w");
     if (!f)
     {
-        LOG_NET_ERROR("Diagnostics: Could not create network_diag.txt");
+        printf("[Diag] Error: Could not create network_diag.txt\n");
         return;
     }
 
@@ -2239,7 +2012,7 @@ void Net_DumpDiagnosticReport(void)
     }
 
     fclose(f);
-    LOG_NET_INFO("Diagnostics: Report written to network_diag.txt ({} samples)", gDiagCount);
+    printf("[Diag] Report written to network_diag.txt (%d samples)\n", gDiagCount);
 }
 
 
@@ -2255,7 +2028,7 @@ void Net_StartDiagnostics(void)
     gLastNetMessageTime = 0;
     gLastFrameTime = 0;
     gDiagEnabled = true;
-    LOG_NET_INFO("Diagnostics: Started recording (press F9 to stop and dump report)...");
+    printf("[Diag] Started recording (press F9 to stop and dump report)...\n");
 }
 
 
@@ -2282,32 +2055,6 @@ Boolean Net_IsDiagnosticsEnabled(void)
 }
 
 
-/********************* NET GET ERROR STRING *******************************/
-//
-// Get human-readable string for error codes
-//
-
-const char* Net_GetErrorString(int errorCode)
-{
-    switch ((NetErrorCode)errorCode)
-    {
-        case NetErrorCode::none:              return "No error";
-        case NetErrorCode::timeout_config:    return "Timeout waiting for game config";
-        case NetErrorCode::timeout_sync:      return "Timeout waiting for player sync";
-        case NetErrorCode::timeout_vehicle:   return "Timeout waiting for vehicle selection";
-        case NetErrorCode::player_dropped:    return "Player disconnected";
-        case NetErrorCode::connection_lost:   return "Connection lost";
-        case NetErrorCode::invalid_state:     return "Invalid network state";
-        case NetErrorCode::protocol_mismatch: return "Protocol version mismatch";
-        case NetErrorCode::room_full:         return "Room is full";
-        case NetErrorCode::room_not_found:    return "Room not found";
-        case NetErrorCode::invalid_message:   return "Invalid message received";
-        case NetErrorCode::bounds_error:      return "Array bounds error prevented";
-        default:                              return "Unknown error";
-    }
-}
-
-
 #pragma mark - Weapon Synchronization
 
 
@@ -2330,7 +2077,7 @@ void Net_BroadcastWeaponEvent(int weaponType, int playerNum, Boolean throwForwar
     Net_SendWeaponEvent(weaponType, playerNum, throwForward,
                         posX, posY, posZ, velX, velY, velZ, rotY);
 
-    LOG_NET_DEBUG("Broadcasting weapon event: type={}, player={}", weaponType, playerNum);
+    printf("[NET] Broadcasting weapon event: type=%d, player=%d\n", weaponType, playerNum);
 }
 
 
@@ -2351,9 +2098,9 @@ static void OnWeaponEvent(const void* weaponEvent)
     if (msg->player_num >= gNumRealPlayers)
         return;
 
-    LOG_NET_DEBUG("OnWeaponEvent: player={}, type={}, forward={}, pos=({:.0f},{:.0f},{:.0f})",
-                  msg->player_num, msg->weapon_type, msg->throw_forward,
-                  msg->pos_x, msg->pos_y, msg->pos_z);
+    printf("[NET] OnWeaponEvent: player=%d, type=%d, forward=%d, pos=(%.0f,%.0f,%.0f)\n",
+           msg->player_num, msg->weapon_type, msg->throw_forward,
+           msg->pos_x, msg->pos_y, msg->pos_z);
 
     // Create the appropriate weapon based on type
     // These functions need the player's car object to set up properly
@@ -2385,7 +2132,7 @@ static void OnWeaponEvent(const void* weaponEvent)
         // For now, we handle the basic throwable weapons
 
         default:
-            LOG_NET_WARN("Unknown weapon type {}, ignoring", msg->weapon_type);
+            printf("[NET] Unknown weapon type %d, ignoring\n", msg->weapon_type);
             break;
     }
 }

@@ -46,6 +46,10 @@ public:
     [[nodiscard]] const NetPlayerState& getPlayerState(int playerIndex) const { return m_playerStates[playerIndex]; }
     [[nodiscard]] const std::array<NetPlayerState, kMaxPlayersPerRoom>& getAllPlayerStates() const { return m_playerStates; }
 
+    // Dirty flag for bandwidth optimization (only broadcast when state changed)
+    [[nodiscard]] bool isDirty() const { return m_dirty; }
+    void clearDirty() { m_dirty = false; }
+
     // Ready state tracking (per-player bitmask)
     void setPlayerReady(int playerIndex);
     [[nodiscard]] bool isPlayerReady(int playerIndex) const;
@@ -63,6 +67,7 @@ private:
     int  m_playerCount = 0;
     bool m_active = false;
     bool m_gameStarted = false;
+    bool m_dirty = false;  // True when player state changed, needs broadcast
     uint8_t m_playerReadyMask = 0;  // Bitmask of ready players
 };
 

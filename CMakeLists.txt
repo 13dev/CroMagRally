@@ -124,10 +124,44 @@ find_package(OpenGL REQUIRED)
 #------------------------------------------------------------------------------
 
 if(USE_GNS)
-	find_package(GameNetworkingSockets CONFIG REQUIRED)
-	message(STATUS "Found GameNetworkingSockets")
-	find_package(spdlog CONFIG REQUIRED)
-	message(STATUS "Found spdlog")
+	# Build GNS from source by default (vcpkg version may have compatibility issues)
+	option(USE_GNS_FETCHCONTENT "Build GameNetworkingSockets from source" ON)
+
+	if(USE_GNS_FETCHCONTENT)
+		message(STATUS "Building GameNetworkingSockets from source via FetchContent")
+		FetchContent_Declare(
+			GameNetworkingSockets
+			URL https://github.com/ValveSoftware/GameNetworkingSockets/archive/refs/tags/v1.5.1.tar.gz
+			DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+		)
+		# Save and restore BUILD_SHARED_LIBS so it doesn't affect Pomme
+		set(_SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+		set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+		set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+		set(BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+		set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+		set(GAMENETWORKINGSOCKETS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+		set(GAMENETWORKINGSOCKETS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+		FetchContent_MakeAvailable(GameNetworkingSockets)
+		set(BUILD_SHARED_LIBS ${_SAVED_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
+	else()
+		find_package(GameNetworkingSockets CONFIG REQUIRED)
+		message(STATUS "Found GameNetworkingSockets")
+	endif()
+
+	# Try to find spdlog via vcpkg/system, fallback to FetchContent for CI builds
+	find_package(spdlog CONFIG QUIET)
+	if(NOT spdlog_FOUND)
+		message(STATUS "spdlog not found via find_package, fetching from GitHub...")
+		FetchContent_Declare(
+			spdlog
+			URL https://github.com/gabime/spdlog/archive/refs/tags/v1.15.3.tar.gz
+			DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+		)
+		FetchContent_MakeAvailable(spdlog)
+	else()
+		message(STATUS "Found spdlog")
+	endif()
 else()
 	message(FATAL_ERROR "USE_GNS must be enabled - no other networking backends available")
 endif()

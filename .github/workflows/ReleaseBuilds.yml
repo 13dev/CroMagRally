@@ -6,29 +6,31 @@ on:
     tags:
       - 'v*'
 
+env:
+  GNS_VERSION: v1.5.1
+  CACHE_VERSION: v1  # Must match PrebuildDeps.yml
+
 jobs:
   build-linux-appimage:
     runs-on: ${{ matrix.platform.os }}
     timeout-minutes: 45
-    env:
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
     strategy:
       fail-fast: false
       matrix:
         platform:  # Use oldest available Ubuntu for maximum glibc compatibility
-          - { name: x86_64, os: ubuntu-22.04 }
-          - { name: aarch64, os: ubuntu-22.04-arm }
+          - { name: x86_64, os: ubuntu-22.04, cache-platform: linux-x64 }
+          - { name: aarch64, os: ubuntu-22.04-arm, cache-platform: linux-arm64 }
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
-      - name: Create vcpkg binary cache directory
-        run: mkdir -p ${{ github.workspace }}/vcpkg-cache
-      - name: Cache vcpkg binaries
-        uses: actions/cache@v4
+
+      - name: Restore prebuilt GNS from cache
+        uses: actions/cache/restore@v4
+        id: gns-cache
         with:
-          path: ${{ github.workspace }}/vcpkg-cache
-          key: vcpkg-bin-linux-${{ matrix.platform.name }}-${{ hashFiles('.github/workflows/ReleaseBuilds.yml') }}
-          restore-keys: vcpkg-bin-linux-${{ matrix.platform.name }}-
+          path: gns-prebuilt
+          key: gns-prebuilt-${{ matrix.platform.cache-platform }}-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
+
       - name: Get build dependencies from APT
         run: |
           sudo apt update
@@ -39,10 +41,22 @@ jobs:
             libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev libudev-dev fcitx-libs-dev \
             libpipewire-0.3-dev libwayland-dev libdecor-0-dev liburing-dev \
             desktop-file-utils
-      - name: Install GNS via vcpkg
+
+      - name: Install GNS via vcpkg (fallback)
+        if: steps.gns-cache.outputs.cache-hit != 'true'
         run: |
+          echo "::warning::Prebuilt GNS cache miss - building from vcpkg (slower)"
           vcpkg install gamenetworkingsockets
           echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $GITHUB_ENV
+
+      - name: Set up prebuilt GNS
+        if: steps.gns-cache.outputs.cache-hit == 'true'
+        run: |
+          echo "Using prebuilt GNS from cache"
+          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/gns-prebuilt" >> $GITHUB_ENV
+          # Add library path for runtime
+          echo "LD_LIBRARY_PATH=${{ github.workspace }}/gns-prebuilt/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
       - run: echo "ARTIFACT_NAME=$(python3 build.py --print-artifact-name)" >> $GITHUB_ENV
       - run: python3 build.py --dependencies
       - run: python3 build.py --configure
@@ -57,23 +71,30 @@ jobs:
   build-windows:
     runs-on: windows-2022
     timeout-minutes: 45
-    env:
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
-      - name: Create vcpkg binary cache directory
-        run: New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/vcpkg-cache"
-      - name: Cache vcpkg binaries
-        uses: actions/cache@v4
+
+      - name: Restore prebuilt GNS from cache
+        uses: actions/cache/restore@v4
+        id: gns-cache
         with:
-          path: ${{ github.workspace }}/vcpkg-cache
-          key: vcpkg-bin-windows-x64-${{ hashFiles('.github/workflows/ReleaseBuilds.yml') }}
-          restore-keys: vcpkg-bin-windows-x64-
-      - name: Install GNS via vcpkg
+          path: gns-prebuilt
+          key: gns-prebuilt-windows-x64-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
+
+      - name: Install GNS via vcpkg (fallback)
+        if: steps.gns-cache.outputs.cache-hit != 'true'
         run: |
+          Write-Host "::warning::Prebuilt GNS cache miss - building from vcpkg (slower)"
           vcpkg install gamenetworkingsockets:x64-windows
           echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+
+      - name: Set up prebuilt GNS
+        if: steps.gns-cache.outputs.cache-hit == 'true'
+        run: |
+          Write-Host "Using prebuilt GNS from cache"
+          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/gns-prebuilt" >> $env:GITHUB_ENV
+
       - run: |
           $ARTIFACT_NAME = python3 build.py --print-artifact-name
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $env:GITHUB_ENV
@@ -91,23 +112,32 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     continue-on-error: true  # macOS is optional for release
-    env:
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
-      - name: Create vcpkg binary cache directory
-        run: mkdir -p ${{ github.workspace }}/vcpkg-cache
-      - name: Cache vcpkg binaries
-        uses: actions/cache@v4
+
+      - name: Restore prebuilt GNS from cache
+        uses: actions/cache/restore@v4
+        id: gns-cache
         with:
-          path: ${{ github.workspace }}/vcpkg-cache
-          key: vcpkg-bin-macos-arm64-${{ hashFiles('.github/workflows/ReleaseBuilds.yml') }}
-          restore-keys: vcpkg-bin-macos-arm64-
-      - name: Install GNS via vcpkg
+          path: gns-prebuilt
+          key: gns-prebuilt-macos-arm64-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
+
+      - name: Install GNS via vcpkg (fallback)
+        if: steps.gns-cache.outputs.cache-hit != 'true'
         run: |
+          echo "::warning::Prebuilt GNS cache miss - building from vcpkg (slower)"
           vcpkg install gamenetworkingsockets
           echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $GITHUB_ENV
+
+      - name: Set up prebuilt GNS
+        if: steps.gns-cache.outputs.cache-hit == 'true'
+        run: |
+          echo "Using prebuilt GNS from cache"
+          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/gns-prebuilt" >> $GITHUB_ENV
+          # Add library path for runtime
+          echo "DYLD_LIBRARY_PATH=${{ github.workspace }}/gns-prebuilt/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+
       - name: Get artifact name
         run: echo "ARTIFACT_NAME=$(python3 build.py --print-artifact-name)" >> $GITHUB_ENV
       - run: python3 build.py --dependencies

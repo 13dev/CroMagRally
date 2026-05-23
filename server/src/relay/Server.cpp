@@ -104,20 +104,23 @@ void Server::update()
 {
     m_interface->RunCallbacks();
 
-    // Process incoming messages
-    SteamNetworkingMessage_t* msgs[64];
-    int numMsgs = m_interface->ReceiveMessagesOnPollGroup(m_pollGroup, msgs, 64);
+    // Drain the entire message queue to prevent overflow
+    SteamNetworkingMessage_t* msgs[256];
+    int numMsgs;
 
-    for (int i = 0; i < numMsgs; ++i)
+    while ((numMsgs = m_interface->ReceiveMessagesOnPollGroup(m_pollGroup, msgs, 256)) > 0)
     {
-        auto* msg = msgs[i];
-        if (msg->m_cbSize > 0)
+        for (int i = 0; i < numMsgs; ++i)
         {
-            relayMessage(msg->m_conn,
-                         static_cast<const uint8_t*>(msg->m_pData),
-                         static_cast<size_t>(msg->m_cbSize));
+            auto* msg = msgs[i];
+            if (msg->m_cbSize > 0)
+            {
+                relayMessage(msg->m_conn,
+                             static_cast<const uint8_t*>(msg->m_pData),
+                             static_cast<size_t>(msg->m_cbSize));
+            }
+            msg->Release();
         }
-        msg->Release();
     }
 
     // Broadcast world states to all players (equal-players model)
@@ -181,14 +184,9 @@ Room* Server::findAvailableRoom()
 
 Room* Server::findRoomByCode(const char* code)
 {
-    for (auto& room : m_rooms)
-    {
-        if (room.isActive() && std::strncmp(room.getCode(), code, kRoomCodeLength) == 0)
-        {
-            return &room;
-        }
-    }
-    return nullptr;
+    std::string key(code, kRoomCodeLength);
+    auto it = m_roomsByCode.find(key);
+    return (it != m_roomsByCode.end()) ? it->second : nullptr;
 }
 
 Room* Server::createRoom(HSteamNetConnection hostConn)
@@ -199,6 +197,8 @@ Room* Server::createRoom(HSteamNetConnection hostConn)
         {
             room.activate(hostConn);
             m_connectionToRoom[hostConn] = static_cast<int>(&room - m_rooms.data());
+            // Add to room code lookup map
+            m_roomsByCode[std::string(room.getCode(), kRoomCodeLength)] = &room;
             return &room;
         }
     }
@@ -240,10 +240,14 @@ void Server::removeFromRoom(HSteamNetConnection conn)
                 m_connectionToRoom.erase(existingConn);
             }
         }
+        // Remove from room code lookup before deactivating
+        m_roomsByCode.erase(std::string(room->getCode(), kRoomCodeLength));
         room->deactivate();
     }
     else if (room->getPlayerCount() <= 0)
     {
+        // Remove from room code lookup before deactivating
+        m_roomsByCode.erase(std::string(room->getCode(), kRoomCodeLength));
         room->deactivate();
     }
 }
@@ -527,6 +531,26 @@ void Server::relayMessage(HSteamNetConnection sender, const uint8_t* data, size_
               ? k_nSteamNetworkingSend_Reliable
               : k_nSteamNetworkingSend_UnreliableNoDelay;
 
+    // Broadcast SYNC, VEHICLE_TYPE, and PLAYER_NAME to ALL players (not just host)
+    // These messages are needed by all clients for synchronization barriers and lobby display
+    bool shouldBroadcastToAll = (msgType == MsgType::SYNC ||
+                                  msgType == MsgType::VEHICLE_TYPE ||
+                                  msgType == MsgType::PLAYER_NAME);
+
+    if (shouldBroadcastToAll)
+    {
+        // Broadcast to all players except sender
+        for (auto conn : room->getConnections())
+        {
+            if (conn != k_HSteamNetConnection_Invalid && conn != sender)
+            {
+                m_interface->SendMessageToConnection(conn, data,
+                    static_cast<uint32_t>(size), flags, nullptr);
+            }
+        }
+        return;  // Don't fall through to host-only routing
+    }
+
     if (room->isHost(sender))
     {
         // Host -> broadcast to all clients
@@ -625,8 +649,11 @@ void Server::broadcastWorldStates()
     // For each active room with game started, broadcast world state to all players
     for (auto& room : m_rooms)
     {
-        if (!room.isActive() || !room.isGameStarted())
+        // Skip inactive rooms, pre-game lobbies, and rooms with no state changes
+        if (!room.isActive() || !room.isGameStarted() || !room.isDirty())
             continue;
+
+        room.clearDirty();
 
         // Build packed world state message
         NetWorldState world = {};
