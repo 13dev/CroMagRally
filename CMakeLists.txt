@@ -126,8 +126,16 @@ find_package(OpenGL REQUIRED)
 #------------------------------------------------------------------------------
 
 if(USE_GNS)
+	# Debug: Show where CMake is looking for GNS
+	message(STATUS "Looking for GameNetworkingSockets...")
+	message(STATUS "  CMAKE_PREFIX_PATH = ${CMAKE_PREFIX_PATH}")
+	if(DEFINED GameNetworkingSockets_DIR)
+		message(STATUS "  GameNetworkingSockets_DIR = ${GameNetworkingSockets_DIR}")
+	endif()
+
 	# Try to find prebuilt GNS first (from CMAKE_PREFIX_PATH or system)
-	find_package(GameNetworkingSockets CONFIG QUIET)
+	# NOT using QUIET so we can see why it fails on Windows CI
+	find_package(GameNetworkingSockets CONFIG)
 
 	if(GameNetworkingSockets_FOUND)
 		message(STATUS "Found prebuilt GameNetworkingSockets")

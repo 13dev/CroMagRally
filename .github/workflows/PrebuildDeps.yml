@@ -15,7 +15,7 @@ on:
 
 env:
   GNS_VERSION: ${{ github.event.inputs.gns_version || 'v1.5.1' }}
-  CACHE_VERSION: v3  # Increment to invalidate all caches
+  CACHE_VERSION: v4  # Increment to invalidate all caches
 
 jobs:
   build-linux:
@@ -142,14 +142,50 @@ jobs:
           Get-ChildItem "$dest/lib" -Filter *.lib -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
           echo "=== Debug Libs ==="
           Get-ChildItem "$dest/debug/lib" -Filter *.lib -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
-          echo "=== CMake configs ==="
+          echo "=== CMake configs (share/) ==="
           Get-ChildItem "$dest/share" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
+
+      - name: Verify transitive dependency configs
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          $dest = "${{ github.workspace }}/gns-prebuilt"
+
+          # Required CMake config directories for GNS and its transitive dependencies
+          $requiredConfigs = @(
+            "gamenetworkingsockets",
+            "protobuf",
+            "openssl"
+          )
+
+          $missing = @()
+          foreach ($pkg in $requiredConfigs) {
+            $configDir = "$dest/share/$pkg"
+            if (Test-Path $configDir) {
+              Write-Host "✓ Found CMake config: $pkg"
+              Get-ChildItem "$configDir" -Filter "*.cmake" | ForEach-Object { Write-Host "  - $($_.Name)" }
+            } else {
+              Write-Host "✗ MISSING CMake config: $pkg"
+              $missing += $pkg
+            }
+          }
+
+          # List all .cmake files for debugging
+          echo ""
+          echo "=== All .cmake files in cache ==="
+          Get-ChildItem "$dest" -Recurse -Filter "*.cmake" | ForEach-Object { $_.FullName }
+
+          if ($missing.Count -gt 0) {
+            Write-Host ""
+            Write-Host "::error::Missing CMake configs for: $($missing -join ', ')"
+            Write-Host "These are required transitive dependencies for GameNetworkingSockets"
+            exit 1
+          }
 
       - name: Verify installation
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          echo "=== Installed files ==="
-          Get-ChildItem -Recurse gns-prebuilt | Select-Object -First 50 FullName
+          echo "=== Installed files (first 100) ==="
+          Get-ChildItem -Recurse gns-prebuilt | Select-Object -First 100 FullName
 
       - name: Save to cache
         if: steps.cache-check.outputs.cache-hit != 'true'

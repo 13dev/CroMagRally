@@ -8,7 +8,7 @@ on:
 
 env:
   GNS_VERSION: v1.5.1
-  CACHE_VERSION: v3  # Must match PrebuildDeps.yml
+  CACHE_VERSION: v4  # Must match PrebuildDeps.yml
 
 jobs:
   build-linux-appimage:
@@ -92,6 +92,8 @@ jobs:
           Get-ChildItem gns-prebuilt -Recurse -Directory | Select-Object -First 20 FullName
           Write-Host "=== CMake configs ==="
           Get-ChildItem gns-prebuilt/share -Directory -ErrorAction SilentlyContinue
+          Write-Host "=== All .cmake files in cache ==="
+          Get-ChildItem gns-prebuilt -Recurse -Filter "*.cmake" | ForEach-Object { $_.FullName }
 
       - run: |
           $ARTIFACT_NAME = python3 build.py --print-artifact-name
