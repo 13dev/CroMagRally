@@ -8,7 +8,7 @@ on:
 
 env:
   GNS_VERSION: v1.5.1
-  CACHE_VERSION: v2  # Must match PrebuildDeps.yml
+  CACHE_VERSION: v3  # Must match PrebuildDeps.yml
 
 jobs:
   build-linux-appimage:
