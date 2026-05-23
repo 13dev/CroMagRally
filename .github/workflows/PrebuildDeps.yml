@@ -151,10 +151,13 @@ jobs:
           $dest = "${{ github.workspace }}/gns-prebuilt"
 
           # Required CMake config directories for GNS and its transitive dependencies
+          # From: vcpkg install gamenetworkingsockets:x64-windows
           $requiredConfigs = @(
             "gamenetworkingsockets",
             "protobuf",
-            "openssl"
+            "openssl",
+            "absl",
+            "utf8_range"
           )
 
           $missing = @()

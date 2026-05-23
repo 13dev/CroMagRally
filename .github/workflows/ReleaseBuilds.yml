@@ -95,12 +95,34 @@ jobs:
           Write-Host "=== All .cmake files in cache ==="
           Get-ChildItem gns-prebuilt -Recurse -Filter "*.cmake" | ForEach-Object { $_.FullName }
 
+      - name: Set up vcpkg with cached packages
+        run: |
+          # Point VCPKG_INSTALLED_DIR to our cached packages so vcpkg toolchain finds them
+          echo "VCPKG_INSTALLED_DIR=${{ github.workspace }}/gns-prebuilt-vcpkg" >> $env:GITHUB_ENV
+
+          # Create vcpkg-style directory structure
+          $vcpkgDir = "${{ github.workspace }}/gns-prebuilt-vcpkg/x64-windows"
+          New-Item -ItemType Directory -Path $vcpkgDir -Force | Out-Null
+          Copy-Item -Path "gns-prebuilt/*" -Destination $vcpkgDir -Recurse -Force
+
       - run: |
           $ARTIFACT_NAME = python3 build.py --print-artifact-name
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $env:GITHUB_ENV
       - run: python3 build.py --dependencies
-      - run: python3 build.py --configure -G 'Visual Studio 17 2022' -DCMAKE_PREFIX_PATH="${{ github.workspace }}/gns-prebuilt" -DGameNetworkingSockets_DIR="${{ github.workspace }}/gns-prebuilt/share/gamenetworkingsockets"
+      - run: python3 build.py --configure -G 'Visual Studio 17 2022' -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
       - run: python3 build.py --build
+
+      - name: Copy prebuilt DLLs to output
+        run: |
+          $buildDir = "out/release/Release"
+          $cacheDir = "gns-prebuilt/bin"
+
+          Write-Host "Copying DLLs from cache to build output..."
+          Get-ChildItem "$cacheDir" -Filter "*.dll" | ForEach-Object {
+            Write-Host "  Copying $($_.Name)"
+            Copy-Item $_.FullName -Destination $buildDir -Force
+          }
+
       - run: python3 build.py --package
       - uses: actions/upload-artifact@v4
         with:
