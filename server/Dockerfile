@@ -28,8 +28,9 @@ RUN apt-get update && apt-get install -y \
     libprotobuf32 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy GNS shared library
+# Copy shared libraries (GNS and spdlog)
 COPY --from=builder /build/server/out/release/bin/libGameNetworkingSockets.so /usr/local/lib/
+COPY --from=builder /build/server/out/release/_deps/spdlog-build/libspdlog.so* /usr/local/lib/
 RUN ldconfig
 
 COPY --from=builder /build/server/out/release/relay-server /usr/local/bin/

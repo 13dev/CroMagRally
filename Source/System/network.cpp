@@ -901,7 +901,7 @@ void HostWaitForPlayersToPrepareLevel(void)
             LOG_NET_DEBUG("HostWait: syncMask=0x{:02X}, expected=0x{:02X}", gPlayerSyncBitmask, expectedMask);
             for (int i = 0; i < gNumRealPlayers; i++)
             {
-                bool synced = (gPlayerSyncBitmask & PlayerBit(i)) != 0;
+                [[maybe_unused]] bool synced = (gPlayerSyncBitmask & PlayerBit(i)) != 0;
                 LOG_NET_DEBUG("  Player {}: {}", i, synced ? "SYNCED" : "waiting...");
             }
             lastPrint = now;
@@ -1007,7 +1007,7 @@ void HostSend_ControlInfoToClients(void)
         return;
 
     // Build message struct directly (typed API handles serialization)
-    NetHostControlInfoMessageType msg = {0};
+    NetHostControlInfoMessageType msg = {};
 
     // Timestamp for clock sync
     msg.hostTimeMs = SDL_GetTicks();
@@ -1476,7 +1476,7 @@ void ClientSend_ControlInfoToHost(void)
         return;
 
     // Build message struct directly (typed API handles serialization)
-    NetClientControlInfoMessageType msg = {0};
+    NetClientControlInfoMessageType msg = {};
 
     // Timestamp for RTT calculation
     msg.clientTimeMs = SDL_GetTicks();
@@ -1599,12 +1599,10 @@ void GetVehicleSelectionFromNetPlayers(void)
     OGL_SetupGameView(&viewDef);
 
     // Create waiting message text
-    NewObjectDefinitionType textDef =
-    {
-        .slot = SPRITE_SLOT,
-        .coord = {0, 50, 0},
-        .scale = 0.4f,
-    };
+    NewObjectDefinitionType textDef = {};
+    textDef.slot = SPRITE_SLOT;
+    textDef.coord = {0, 50, 0};
+    textDef.scale = 0.4f;
     ObjNode* waitText = TextMesh_New(Localize(STR_WAITING_FOR_PLAYERS), kTextMeshAlignCenter, &textDef);
     waitText->ColorFilter = OGLColorRGBA{1, 1, 1, 1};
 
@@ -1909,7 +1907,7 @@ void SendPlayerState(void)
     }
 
     // Build the packed player state message
-    NetPlayerState state = {0};
+    NetPlayerState state = {};
     state.player_num = gMyNetworkPlayerNum;
     uint32_t seq = gIsNetworkHost ? gHostSendCounter++ : gClientSendCounter[gMyNetworkPlayerNum]++;
     state.sequence = seq;
