@@ -120,10 +120,13 @@ jobs:
         if: steps.cache-check.outputs.cache-hit == 'true'
         run: echo "Cache hit - skipping build for windows-x64"
 
-      - name: Install dependencies via vcpkg
+      - name: Install dependencies via Chocolatey
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          vcpkg install protobuf:x64-windows openssl:x64-windows
+          choco install openssl protoc -y
+          # Refresh environment to pick up new paths
+          Import-Module $env:ChocolateyInstall\helpers\chocolateyProfile.psm1
+          refreshenv
 
       - name: Clone GameNetworkingSockets
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -134,38 +137,53 @@ jobs:
       - name: Build GameNetworkingSockets
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
+          # Find OpenSSL installed by Chocolatey
+          $opensslDir = "C:\Program Files\OpenSSL-Win64"
+          if (-not (Test-Path $opensslDir)) {
+            $opensslDir = "C:\Program Files\OpenSSL"
+          }
+
           cmake -S gns-src -B gns-build `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/gns-prebuilt" `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DOPENSSL_ROOT_DIR="$opensslDir" `
             -DBUILD_SHARED_LIBS=ON `
             -DBUILD_TESTS=OFF `
             -DBUILD_EXAMPLES=OFF
           cmake --build gns-build --config Release --parallel
           cmake --install gns-build --config Release
 
-      - name: Copy vcpkg dependencies
+      - name: Copy Chocolatey dependencies
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          $vcpkgRoot = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
           $dest = "${{ github.workspace }}/gns-prebuilt"
-
-          # Copy all DLLs for runtime
-          Copy-Item "$vcpkgRoot/bin/*.dll" -Destination "$dest/bin" -ErrorAction SilentlyContinue
-
-          # Copy import libraries for linking
+          New-Item -ItemType Directory -Force -Path "$dest/bin" | Out-Null
           New-Item -ItemType Directory -Force -Path "$dest/lib" | Out-Null
-          Copy-Item "$vcpkgRoot/lib/*.lib" -Destination "$dest/lib" -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$dest/include" | Out-Null
 
-          # Copy headers for compilation
-          Copy-Item "$vcpkgRoot/include" -Destination "$dest" -Recurse -Force -ErrorAction SilentlyContinue
+          # Find OpenSSL installation
+          $opensslDir = "C:\Program Files\OpenSSL-Win64"
+          if (-not (Test-Path $opensslDir)) {
+            $opensslDir = "C:\Program Files\OpenSSL"
+          }
+
+          # Copy OpenSSL DLLs, libs, and headers
+          if (Test-Path "$opensslDir\bin") {
+            Copy-Item "$opensslDir\bin\*.dll" -Destination "$dest/bin" -ErrorAction SilentlyContinue
+          }
+          if (Test-Path "$opensslDir\lib") {
+            Copy-Item "$opensslDir\lib\*.lib" -Destination "$dest/lib" -ErrorAction SilentlyContinue
+          }
+          if (Test-Path "$opensslDir\include\openssl") {
+            Copy-Item "$opensslDir\include\openssl" -Destination "$dest/include" -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
           echo "=== DLLs ==="
-          Get-ChildItem "$dest/bin" -Filter *.dll | ForEach-Object { $_.Name }
+          Get-ChildItem "$dest/bin" -Filter *.dll -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
           echo "=== Import libs ==="
-          Get-ChildItem "$dest/lib" -Filter *.lib | ForEach-Object { $_.Name }
+          Get-ChildItem "$dest/lib" -Filter *.lib -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
           echo "=== Include dirs ==="
-          Get-ChildItem "$dest/include" -Directory | ForEach-Object { $_.Name }
+          Get-ChildItem "$dest/include" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
 
       - name: Verify installation
         if: steps.cache-check.outputs.cache-hit != 'true'
