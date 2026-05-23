@@ -68,29 +68,36 @@ jobs:
 
   build-windows:
     runs-on: ubuntu-latest
-    container: dockcross/windows-static-x64-posix
+    container: fedora:latest
     timeout-minutes: 60
     steps:
+      - name: Install MinGW toolchain
+        run: |
+          dnf install -y \
+            mingw64-gcc-c++ mingw64-cmake cmake \
+            mingw64-openssl mingw64-protobuf \
+            mingw64-winpthreads-static \
+            ninja-build git zip python3
+
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
 
+      - name: Patch Pomme for GCC 16
+        run: |
+          # Add missing cstdint include for GCC 16 compatibility
+          sed -i '1i #include <cstdint>' extern/Pomme/src/Utilities/memstream.cpp
+
       - name: Configure
         run: |
-          # Find MXE toolchain file
-          TOOLCHAIN=$(find /usr/src/mxe -name "mxe-conf.cmake" | head -1)
-          cmake -B build -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+          mingw64-cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SDL_FROM_SOURCE=ON \
-            -DUSE_CRYPTO=BCrypt
+            -DBUILD_SDL_FROM_SOURCE=ON
 
       - name: Build
         run: cmake --build build --parallel
 
       - name: Bundle DLLs
-        run: |
-          # For static build, may not need DLLs
-          python3 scripts/mingw-bundledlls --copy build/CroMagRally.exe || true
+        run: python3 scripts/mingw-bundledlls --copy build/CroMagRally.exe || true
 
       - name: Package
         run: |
