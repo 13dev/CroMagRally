@@ -120,64 +120,29 @@ jobs:
         if: steps.cache-check.outputs.cache-hit == 'true'
         run: echo "Cache hit - skipping build for windows-x64"
 
-      - name: Clone and build Protobuf
+      - name: Install GameNetworkingSockets via vcpkg
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch v25.1 --recursive https://github.com/protocolbuffers/protobuf.git protobuf-src
-          cmake -S protobuf-src -B protobuf-build `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/protobuf-install" `
-            -DBUILD_SHARED_LIBS=OFF `
-            -Dprotobuf_BUILD_TESTS=OFF `
-            -Dprotobuf_ABSL_PROVIDER=module `
-            -DABSL_PROPAGATE_CXX_STD=ON
-          cmake --build protobuf-build --config Release --parallel
-          cmake --install protobuf-build --config Release
+          vcpkg install gamenetworkingsockets:x64-windows
 
-      - name: Clone GameNetworkingSockets
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch ${{ env.GNS_VERSION }} `
-            https://github.com/ValveSoftware/GameNetworkingSockets.git gns-src
-
-      - name: Build GameNetworkingSockets
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: |
-          # OpenSSL is pre-installed on Windows runners
-          $opensslDir = "C:\Program Files\OpenSSL"
-
-          cmake -S gns-src -B gns-build `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/gns-prebuilt" `
-            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/protobuf-install" `
-            -DOPENSSL_ROOT_DIR="$opensslDir" `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DBUILD_TESTS=OFF `
-            -DBUILD_EXAMPLES=OFF
-          cmake --build gns-build --config Release --parallel
-          cmake --install gns-build --config Release
-
-      - name: Copy dependencies
+      - name: Copy from vcpkg
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           $dest = "${{ github.workspace }}/gns-prebuilt"
-          $opensslDir = "C:\Program Files\OpenSSL"
-          $protobufDir = "${{ github.workspace }}/protobuf-install"
+          $vcpkgDir = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
 
-          # Copy OpenSSL (pre-installed on runner)
-          Copy-Item "$opensslDir\bin\*.dll" -Destination "$dest/bin" -ErrorAction SilentlyContinue
-          Copy-Item "$opensslDir\lib\VC\x64\MD\*.lib" -Destination "$dest/lib" -ErrorAction SilentlyContinue
-          Copy-Item "$opensslDir\include\openssl" -Destination "$dest/include" -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$dest/bin" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$dest/lib" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$dest/include" | Out-Null
 
-          # Copy Protobuf (built from source)
-          Copy-Item "$protobufDir\bin\*.dll" -Destination "$dest/bin" -ErrorAction SilentlyContinue
-          Copy-Item "$protobufDir\bin\*.exe" -Destination "$dest/bin" -ErrorAction SilentlyContinue
-          Copy-Item "$protobufDir\lib\*.lib" -Destination "$dest/lib" -ErrorAction SilentlyContinue
-          Copy-Item "$protobufDir\include\*" -Destination "$dest/include" -Recurse -Force -ErrorAction SilentlyContinue
+          # Copy everything from vcpkg
+          Copy-Item "$vcpkgDir\bin\*" -Destination "$dest/bin" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "$vcpkgDir\lib\*" -Destination "$dest/lib" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "$vcpkgDir\include\*" -Destination "$dest/include" -Recurse -Force -ErrorAction SilentlyContinue
 
           echo "=== DLLs ==="
           Get-ChildItem "$dest/bin" -Filter *.dll -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
-          echo "=== Import libs ==="
+          echo "=== Libs ==="
           Get-ChildItem "$dest/lib" -Filter *.lib -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
           echo "=== Include dirs ==="
           Get-ChildItem "$dest/include" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }

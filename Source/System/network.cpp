@@ -1872,8 +1872,6 @@ void NetTick_EqualPlayers(void)
     // Send local player state at fixed rate
     if (NetShouldSendThisFrame())
     {
-        ReadKeyboard();
-        GetLocalKeyState();
         SendPlayerState();
     }
 }
