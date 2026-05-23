@@ -42,6 +42,25 @@
       "cacheVariables": {
         "SANITIZE": "ON"
       }
+    },
+    {
+      "name": "mingw-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/${presetName}",
+      "toolchainFile": "${sourceDir}/cmake/mingw-w64-toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "BUILD_SDL_FROM_SOURCE": "ON"
+      }
+    },
+    {
+      "name": "mingw-release",
+      "displayName": "MinGW Release (Windows cross-compile)",
+      "inherits": "mingw-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -56,6 +75,10 @@
     {
       "name": "debug-sanitize",
       "configurePreset": "debug-sanitize"
+    },
+    {
+      "name": "mingw-release",
+      "configurePreset": "mingw-release"
     }
   ]
 }

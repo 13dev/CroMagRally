@@ -126,6 +126,14 @@ find_package(OpenGL REQUIRED)
 #------------------------------------------------------------------------------
 
 if(USE_GNS)
+	# MinGW fix: GNS uses "Iphlpapi" but MinGW has "iphlpapi" (case-sensitive on Linux)
+	if(MINGW AND CMAKE_CROSSCOMPILING)
+		if(NOT TARGET Iphlpapi)
+			add_library(Iphlpapi INTERFACE IMPORTED)
+			set_target_properties(Iphlpapi PROPERTIES IMPORTED_LIBNAME iphlpapi)
+		endif()
+	endif()
+
 	# Debug: Show where CMake is looking for GNS
 	message(STATUS "Looking for GameNetworkingSockets...")
 	message(STATUS "  CMAKE_PREFIX_PATH = ${CMAKE_PREFIX_PATH}")
@@ -437,6 +445,22 @@ if(WIN32)
 
 	# Visual Studio redistributable DLLs for cmake --install
 	include(InstallRequiredSystemLibraries)
+
+	# MinGW cross-compilation: use mingw-bundledlls to auto-detect and copy DLLs
+	if(MINGW AND CMAKE_CROSSCOMPILING)
+		# Copy GNS DLL from build directory first (needed for dependency detection)
+		add_custom_command(TARGET ${GAME_TARGET} POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"${CMAKE_BINARY_DIR}/bin/libGameNetworkingSockets.dll"
+				"$<TARGET_FILE_DIR:${GAME_TARGET}>/"
+			COMMENT "Copying GameNetworkingSockets DLL")
+
+		# Use mingw-bundledlls to auto-detect and copy all required DLLs
+		add_custom_command(TARGET ${GAME_TARGET} POST_BUILD
+			COMMAND ${CMAKE_SOURCE_DIR}/scripts/mingw-bundledlls --copy "$<TARGET_FILE:${GAME_TARGET}>"
+			WORKING_DIRECTORY "$<TARGET_FILE_DIR:${GAME_TARGET}>"
+			COMMENT "Bundling MinGW DLL dependencies")
+	endif()
 endif()
 
 # Copy documentation to output folder

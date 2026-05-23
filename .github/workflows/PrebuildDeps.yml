@@ -103,9 +103,9 @@ jobs:
           path: gns-prebuilt
           key: gns-prebuilt-${{ matrix.platform }}-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
 
-  build-windows:
-    runs-on: windows-2022
-    timeout-minutes: 30
+  build-mingw:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
     steps:
       - name: Check existing cache
         if: ${{ !inputs.force_rebuild }}
@@ -113,89 +113,101 @@ jobs:
         id: cache-check
         with:
           path: gns-prebuilt
-          key: gns-prebuilt-windows-x64-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
+          key: gns-prebuilt-mingw-x64-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
           lookup-only: true
 
       - name: Skip if cache exists
         if: steps.cache-check.outputs.cache-hit == 'true'
-        run: echo "Cache hit - skipping build for windows-x64"
+        run: echo "Cache hit - skipping build for mingw-x64"
 
-      - name: Install GameNetworkingSockets via vcpkg
+      - name: Install MinGW and vcpkg dependencies
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          vcpkg install gamenetworkingsockets:x64-windows
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 ninja-build protobuf-compiler curl zip unzip tar
 
-      - name: Copy from vcpkg
+          # Fix case-sensitivity: GNS uses "Iphlpapi" but MinGW has "iphlpapi"
+          MINGW_LIB=$(find /usr -name "libiphlpapi.a" 2>/dev/null | head -1)
+          if [ -n "$MINGW_LIB" ]; then
+            MINGW_DIR=$(dirname "$MINGW_LIB")
+            sudo ln -sf "$MINGW_LIB" "$MINGW_DIR/libIphlpapi.a"
+          fi
+
+      - name: Setup vcpkg
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          $dest = "${{ github.workspace }}/gns-prebuilt"
-          $vcpkgDir = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
+          git clone https://github.com/microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh
 
-          # Copy entire vcpkg structure to preserve paths expected by CMake configs
-          Copy-Item "$vcpkgDir\*" -Destination "$dest" -Recurse -Force -ErrorAction SilentlyContinue
-
-          echo "=== Top-level directories ==="
-          Get-ChildItem "$dest" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
-          echo "=== DLLs ==="
-          Get-ChildItem "$dest/bin" -Filter *.dll -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
-          echo "=== Release Libs ==="
-          Get-ChildItem "$dest/lib" -Filter *.lib -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
-          echo "=== Debug Libs ==="
-          Get-ChildItem "$dest/debug/lib" -Filter *.lib -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
-          echo "=== CMake configs (share/) ==="
-          Get-ChildItem "$dest/share" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
-
-      - name: Verify transitive dependency configs
+      - name: Install MinGW dependencies via vcpkg
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          $dest = "${{ github.workspace }}/gns-prebuilt"
+          # Install OpenSSL and Protobuf for MinGW static linking
+          ./vcpkg/vcpkg install openssl:x64-mingw-static protobuf:x64-mingw-static
 
-          # Required CMake config directories for GNS and its transitive dependencies
-          # From: vcpkg install gamenetworkingsockets:x64-windows
-          $requiredConfigs = @(
-            "gamenetworkingsockets",
-            "protobuf",
-            "openssl",
-            "absl",
-            "utf8_range"
-          )
+      - name: Clone GameNetworkingSockets
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.GNS_VERSION }} \
+            https://github.com/ValveSoftware/GameNetworkingSockets.git gns-src
 
-          $missing = @()
-          foreach ($pkg in $requiredConfigs) {
-            $configDir = "$dest/share/$pkg"
-            if (Test-Path $configDir) {
-              Write-Host "✓ Found CMake config: $pkg"
-              Get-ChildItem "$configDir" -Filter "*.cmake" | ForEach-Object { Write-Host "  - $($_.Name)" }
-            } else {
-              Write-Host "✗ MISSING CMake config: $pkg"
-              $missing += $pkg
-            }
-          }
+      - name: Build GameNetworkingSockets for MinGW
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          VCPKG_INSTALLED="${{ github.workspace }}/vcpkg/installed/x64-mingw-static"
 
-          # List all .cmake files for debugging
-          echo ""
-          echo "=== All .cmake files in cache ==="
-          Get-ChildItem "$dest" -Recurse -Filter "*.cmake" | ForEach-Object { $_.FullName }
+          cmake -S gns-src -B gns-build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+            -DCMAKE_FIND_ROOT_PATH="$VCPKG_INSTALLED" \
+            -DCMAKE_PREFIX_PATH="$VCPKG_INSTALLED" \
+            -DOPENSSL_ROOT_DIR="$VCPKG_INSTALLED" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/gns-prebuilt \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF
+          cmake --build gns-build --parallel
+          cmake --install gns-build
 
-          if ($missing.Count -gt 0) {
-            Write-Host ""
-            Write-Host "::error::Missing CMake configs for: $($missing -join ', ')"
-            Write-Host "These are required transitive dependencies for GameNetworkingSockets"
-            exit 1
-          }
+      - name: Copy vcpkg dependencies
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          dest=${{ github.workspace }}/gns-prebuilt
+          VCPKG_INSTALLED="${{ github.workspace }}/vcpkg/installed/x64-mingw-static"
+
+          # Copy headers
+          cp -r "$VCPKG_INSTALLED/include/"* "$dest/include/"
+
+          # Copy static libraries
+          cp "$VCPKG_INSTALLED/lib/"*.a "$dest/lib/" 2>/dev/null || true
+
+          # Copy CMake configs
+          mkdir -p "$dest/share"
+          cp -r "$VCPKG_INSTALLED/share/"* "$dest/share/" 2>/dev/null || true
+
+          echo "=== Headers ==="
+          ls "$dest/include/"
+          echo "=== Libraries ==="
+          ls "$dest/lib/"
+          echo "=== CMake configs ==="
+          ls "$dest/share/" 2>/dev/null || echo "(none)"
 
       - name: Verify installation
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          echo "=== Installed files (first 100) ==="
-          Get-ChildItem -Recurse gns-prebuilt | Select-Object -First 100 FullName
+          echo "=== Installed files ==="
+          find gns-prebuilt -type f | head -50
+          echo "=== Library files ==="
+          ls -la gns-prebuilt/lib/ 2>/dev/null || true
 
       - name: Save to cache
         if: steps.cache-check.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: gns-prebuilt
-          key: gns-prebuilt-windows-x64-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
+          key: gns-prebuilt-mingw-x64-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
 
   build-macos:
     runs-on: macos-latest

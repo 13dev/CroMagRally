@@ -66,68 +66,76 @@ jobs:
           path: dist/
           compression-level: 0
 
-  build-windows:
-    runs-on: windows-2022
+  build-windows-mingw:
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
 
-      - name: Restore prebuilt GNS from cache
+      - name: Restore prebuilt MinGW GNS from cache
         uses: actions/cache/restore@v4
         id: gns-cache
         with:
           path: gns-prebuilt
-          key: gns-prebuilt-windows-x64-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
+          key: gns-prebuilt-mingw-x64-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
+
+      - name: Install MinGW toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 ninja-build protobuf-compiler
 
       - name: Verify prebuilt GNS cache
         if: steps.gns-cache.outputs.cache-hit != 'true'
         run: |
-          Write-Host "::error::Prebuilt GNS cache miss! Run PrebuildDeps.yml workflow manually."
+          echo "::error::Prebuilt MinGW GNS cache miss! Run PrebuildDeps.yml workflow manually."
           exit 1
 
-      - name: Debug cache contents
+      - name: Set up prebuilt GNS
         run: |
-          Write-Host "=== Cache contents ==="
-          Get-ChildItem gns-prebuilt -Recurse -Directory | Select-Object -First 20 FullName
-          Write-Host "=== CMake configs ==="
-          Get-ChildItem gns-prebuilt/share -Directory -ErrorAction SilentlyContinue
-          Write-Host "=== All .cmake files in cache ==="
-          Get-ChildItem gns-prebuilt -Recurse -Filter "*.cmake" | ForEach-Object { $_.FullName }
+          echo "Using prebuilt MinGW GNS from cache"
+          echo "MINGW_VCPKG_ROOT=${{ github.workspace }}/gns-prebuilt" >> $GITHUB_ENV
 
-      - name: Set up vcpkg with cached packages
+      - name: Get artifact name
         run: |
-          # Point VCPKG_INSTALLED_DIR to our cached packages so vcpkg toolchain finds them
-          echo "VCPKG_INSTALLED_DIR=${{ github.workspace }}/gns-prebuilt-vcpkg" >> $env:GITHUB_ENV
+          # Override artifact name for Windows
+          VERSION=$(grep 'set(GAME_VERSION' CMakeLists.txt | sed 's/.*"\(.*\)".*/\1/')
+          echo "ARTIFACT_NAME=CroMagRally-${VERSION}-Windows-x86_64" >> $GITHUB_ENV
 
-          # Create vcpkg-style directory structure
-          $vcpkgDir = "${{ github.workspace }}/gns-prebuilt-vcpkg/x64-windows"
-          New-Item -ItemType Directory -Path $vcpkgDir -Force | Out-Null
-          Copy-Item -Path "gns-prebuilt/*" -Destination $vcpkgDir -Recurse -Force
-
-      - run: |
-          $ARTIFACT_NAME = python3 build.py --print-artifact-name
-          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $env:GITHUB_ENV
-      - run: python3 build.py --dependencies
-      - run: python3 build.py --configure -G 'Visual Studio 17 2022' -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-      - run: python3 build.py --build
-
-      - name: Copy prebuilt DLLs to output
+      - name: Configure with MinGW
         run: |
-          $buildDir = "out/release/Release"
-          $cacheDir = "gns-prebuilt/bin"
+          cmake --preset mingw-release \
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/gns-prebuilt"
 
-          Write-Host "Copying DLLs from cache to build output..."
-          Get-ChildItem "$cacheDir" -Filter "*.dll" | ForEach-Object {
-            Write-Host "  Copying $($_.Name)"
-            Copy-Item $_.FullName -Destination $buildDir -Force
-          }
+      - name: Build
+        run: cmake --build --preset mingw-release --parallel
 
-      - run: python3 build.py --package
+      - name: Package Windows build
+        run: |
+          mkdir -p dist
+          BUILD_DIR="out/mingw-release"
+
+          # Create package directory
+          VERSION=$(grep 'set(GAME_VERSION' CMakeLists.txt | sed 's/.*"\(.*\)".*/\1/')
+          PKG_DIR="dist/CroMagRally-${VERSION}-Windows-x86_64"
+          mkdir -p "$PKG_DIR"
+
+          # Copy executable and all DLLs (auto-bundled by CMake post-build step)
+          cp "$BUILD_DIR/CroMagRally.exe" "$PKG_DIR/"
+          cp "$BUILD_DIR"/*.dll "$PKG_DIR/" 2>/dev/null || true
+
+          # Copy Data folder and ReadMe
+          cp -r "$BUILD_DIR/Data" "$PKG_DIR/"
+          cp "$BUILD_DIR/ReadMe.txt" "$PKG_DIR/" 2>/dev/null || true
+
+          # Create zip
+          cd dist
+          zip -r "CroMagRally-${VERSION}-Windows-x86_64.zip" "CroMagRally-${VERSION}-Windows-x86_64"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{env.ARTIFACT_NAME}}
-          path: dist/
+          path: dist/*.zip
           compression-level: 0
 
   build-macos:
@@ -170,7 +178,7 @@ jobs:
           compression-level: 0
 
   release:
-    needs: [build-linux-appimage, build-windows, build-macos]
+    needs: [build-linux-appimage, build-windows-mingw, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
