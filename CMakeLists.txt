@@ -126,11 +126,14 @@ find_package(OpenGL REQUIRED)
 #------------------------------------------------------------------------------
 
 if(USE_GNS)
-	# Build GNS from source by default (vcpkg version may have compatibility issues)
-	option(USE_GNS_FETCHCONTENT "Build GameNetworkingSockets from source" ON)
+	# Try to find prebuilt GNS first (from CMAKE_PREFIX_PATH or system)
+	find_package(GameNetworkingSockets CONFIG QUIET)
 
-	if(USE_GNS_FETCHCONTENT)
-		message(STATUS "Building GameNetworkingSockets from source via FetchContent")
+	if(GameNetworkingSockets_FOUND)
+		message(STATUS "Found prebuilt GameNetworkingSockets")
+	else()
+		# Fall back to building from source
+		message(STATUS "Prebuilt GNS not found, building from source via FetchContent")
 		FetchContent_Declare(
 			GameNetworkingSockets
 			URL https://github.com/ValveSoftware/GameNetworkingSockets/archive/refs/tags/v1.5.1.tar.gz
@@ -146,9 +149,6 @@ if(USE_GNS)
 		set(GAMENETWORKINGSOCKETS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 		FetchContent_MakeAvailable(GameNetworkingSockets)
 		set(BUILD_SHARED_LIBS ${_SAVED_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
-	else()
-		find_package(GameNetworkingSockets CONFIG REQUIRED)
-		message(STATUS "Found GameNetworkingSockets")
 	endif()
 
 	# Try to find spdlog via vcpkg/system, fallback to FetchContent for CI builds
