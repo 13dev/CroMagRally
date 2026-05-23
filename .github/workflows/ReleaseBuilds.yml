@@ -68,44 +68,61 @@ jobs:
 
   build-windows-mingw:
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
 
-      - name: Restore prebuilt MinGW GNS from cache
-        uses: actions/cache/restore@v4
-        id: gns-cache
-        with:
-          path: gns-prebuilt
-          key: gns-prebuilt-mingw-x64-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
-
-      - name: Install MinGW toolchain
+      - name: Install MinGW (POSIX threading) and dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y mingw-w64 ninja-build protobuf-compiler
+          # Use POSIX threading variant (required for std::mutex in abseil)
+          sudo apt-get install -y g++-mingw-w64-x86-64-posix gcc-mingw-w64-x86-64-posix \
+            ninja-build protobuf-compiler curl zip unzip tar pkg-config
 
-      - name: Verify prebuilt GNS cache
-        if: steps.gns-cache.outputs.cache-hit != 'true'
-        run: |
-          echo "::error::Prebuilt MinGW GNS cache miss! Run PrebuildDeps.yml workflow manually."
-          exit 1
+          # Set posix as default
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
 
-      - name: Set up prebuilt GNS
+          # Fix case-sensitivity for iphlpapi
+          MINGW_LIB=$(find /usr -name "libiphlpapi.a" 2>/dev/null | head -1)
+          if [ -n "$MINGW_LIB" ]; then
+            sudo ln -sf "$MINGW_LIB" "$(dirname $MINGW_LIB)/libIphlpapi.a"
+          fi
+
+      - name: Setup vcpkg
         run: |
-          echo "Using prebuilt MinGW GNS from cache"
-          echo "MINGW_VCPKG_ROOT=${{ github.workspace }}/gns-prebuilt" >> $GITHUB_ENV
+          git clone https://github.com/microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Install MinGW dependencies via vcpkg
+        run: |
+          # Use posix threading triplet
+          cat > vcpkg/triplets/community/x64-mingw-static-posix.cmake << 'EOF'
+          set(VCPKG_TARGET_ARCHITECTURE x64)
+          set(VCPKG_CRT_LINKAGE dynamic)
+          set(VCPKG_LIBRARY_LINKAGE static)
+          set(VCPKG_CMAKE_SYSTEM_NAME MinGW)
+          set(VCPKG_POLICY_DLLS_WITHOUT_LIBS enabled)
+          set(VCPKG_C_FLAGS "-pthread")
+          set(VCPKG_CXX_FLAGS "-pthread")
+          EOF
+
+          ./vcpkg/vcpkg install openssl:x64-mingw-static-posix protobuf:x64-mingw-static-posix
 
       - name: Get artifact name
         run: |
-          # Override artifact name for Windows
           VERSION=$(grep 'set(GAME_VERSION' CMakeLists.txt | sed 's/.*"\(.*\)".*/\1/')
           echo "ARTIFACT_NAME=CroMagRally-${VERSION}-Windows-x86_64" >> $GITHUB_ENV
 
       - name: Configure with MinGW
         run: |
+          VCPKG_INSTALLED="${{ github.workspace }}/vcpkg/installed/x64-mingw-static-posix"
           cmake --preset mingw-release \
-            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/gns-prebuilt"
+            -DCMAKE_PREFIX_PATH="$VCPKG_INSTALLED" \
+            -DOPENSSL_ROOT_DIR="$VCPKG_INSTALLED"
+        env:
+          MINGW_VCPKG_ROOT: ${{ github.workspace }}/vcpkg/installed/x64-mingw-static-posix
 
       - name: Build
         run: cmake --build --preset mingw-release --parallel
@@ -114,23 +131,19 @@ jobs:
         run: |
           mkdir -p dist
           BUILD_DIR="out/mingw-release"
-
-          # Create package directory
           VERSION=$(grep 'set(GAME_VERSION' CMakeLists.txt | sed 's/.*"\(.*\)".*/\1/')
           PKG_DIR="dist/CroMagRally-${VERSION}-Windows-x86_64"
           mkdir -p "$PKG_DIR"
 
-          # Copy executable and all DLLs (auto-bundled by CMake post-build step)
+          # Copy executable and DLLs
           cp "$BUILD_DIR/CroMagRally.exe" "$PKG_DIR/"
           cp "$BUILD_DIR"/*.dll "$PKG_DIR/" 2>/dev/null || true
 
-          # Copy Data folder and ReadMe
+          # Copy Data and ReadMe
           cp -r "$BUILD_DIR/Data" "$PKG_DIR/"
           cp "$BUILD_DIR/ReadMe.txt" "$PKG_DIR/" 2>/dev/null || true
 
-          # Create zip
-          cd dist
-          zip -r "CroMagRally-${VERSION}-Windows-x86_64.zip" "CroMagRally-${VERSION}-Windows-x86_64"
+          cd dist && zip -r "CroMagRally-${VERSION}-Windows-x86_64.zip" "CroMagRally-${VERSION}-Windows-x86_64"
 
       - uses: actions/upload-artifact@v4
         with:
