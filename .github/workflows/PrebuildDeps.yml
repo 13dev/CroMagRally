@@ -120,13 +120,18 @@ jobs:
         if: steps.cache-check.outputs.cache-hit == 'true'
         run: echo "Cache hit - skipping build for windows-x64"
 
-      - name: Install dependencies via Chocolatey
+      - name: Clone and build Protobuf
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          choco install openssl protoc -y
-          # Refresh environment to pick up new paths
-          Import-Module $env:ChocolateyInstall\helpers\chocolateyProfile.psm1
-          refreshenv
+          git clone --depth 1 --branch v25.1 --recursive https://github.com/protocolbuffers/protobuf.git protobuf-src
+          cmake -S protobuf-src -B protobuf-build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/protobuf-install" `
+            -Dprotobuf_BUILD_TESTS=OFF `
+            -Dprotobuf_ABSL_PROVIDER=module `
+            -DABSL_PROPAGATE_CXX_STD=ON
+          cmake --build protobuf-build --config Release --parallel
+          cmake --install protobuf-build --config Release
 
       - name: Clone GameNetworkingSockets
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -137,15 +142,13 @@ jobs:
       - name: Build GameNetworkingSockets
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          # Find OpenSSL installed by Chocolatey
-          $opensslDir = "C:\Program Files\OpenSSL-Win64"
-          if (-not (Test-Path $opensslDir)) {
-            $opensslDir = "C:\Program Files\OpenSSL"
-          }
+          # OpenSSL is pre-installed on Windows runners
+          $opensslDir = "C:\Program Files\OpenSSL"
 
           cmake -S gns-src -B gns-build `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/gns-prebuilt" `
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/protobuf-install" `
             -DOPENSSL_ROOT_DIR="$opensslDir" `
             -DBUILD_SHARED_LIBS=ON `
             -DBUILD_TESTS=OFF `
@@ -153,30 +156,23 @@ jobs:
           cmake --build gns-build --config Release --parallel
           cmake --install gns-build --config Release
 
-      - name: Copy Chocolatey dependencies
+      - name: Copy dependencies
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
           $dest = "${{ github.workspace }}/gns-prebuilt"
-          New-Item -ItemType Directory -Force -Path "$dest/bin" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$dest/lib" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$dest/include" | Out-Null
+          $opensslDir = "C:\Program Files\OpenSSL"
+          $protobufDir = "${{ github.workspace }}/protobuf-install"
 
-          # Find OpenSSL installation
-          $opensslDir = "C:\Program Files\OpenSSL-Win64"
-          if (-not (Test-Path $opensslDir)) {
-            $opensslDir = "C:\Program Files\OpenSSL"
-          }
+          # Copy OpenSSL (pre-installed on runner)
+          Copy-Item "$opensslDir\bin\*.dll" -Destination "$dest/bin" -ErrorAction SilentlyContinue
+          Copy-Item "$opensslDir\lib\VC\x64\MD\*.lib" -Destination "$dest/lib" -ErrorAction SilentlyContinue
+          Copy-Item "$opensslDir\include\openssl" -Destination "$dest/include" -Recurse -Force -ErrorAction SilentlyContinue
 
-          # Copy OpenSSL DLLs, libs, and headers
-          if (Test-Path "$opensslDir\bin") {
-            Copy-Item "$opensslDir\bin\*.dll" -Destination "$dest/bin" -ErrorAction SilentlyContinue
-          }
-          if (Test-Path "$opensslDir\lib") {
-            Copy-Item "$opensslDir\lib\*.lib" -Destination "$dest/lib" -ErrorAction SilentlyContinue
-          }
-          if (Test-Path "$opensslDir\include\openssl") {
-            Copy-Item "$opensslDir\include\openssl" -Destination "$dest/include" -Recurse -Force -ErrorAction SilentlyContinue
-          }
+          # Copy Protobuf (built from source)
+          Copy-Item "$protobufDir\bin\*.dll" -Destination "$dest/bin" -ErrorAction SilentlyContinue
+          Copy-Item "$protobufDir\bin\*.exe" -Destination "$dest/bin" -ErrorAction SilentlyContinue
+          Copy-Item "$protobufDir\lib\*.lib" -Destination "$dest/lib" -ErrorAction SilentlyContinue
+          Copy-Item "$protobufDir\include\*" -Destination "$dest/include" -Recurse -Force -ErrorAction SilentlyContinue
 
           echo "=== DLLs ==="
           Get-ChildItem "$dest/bin" -Filter *.dll -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
