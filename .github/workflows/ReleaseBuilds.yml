@@ -76,9 +76,11 @@ jobs:
 
       - name: Configure
         run: |
+          MXE_SYSROOT="/usr/src/mxe/usr/x86_64-w64-mingw32.static.posix"
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SDL_FROM_SOURCE=ON
+            -DBUILD_SDL_FROM_SOURCE=ON \
+            -DOPENSSL_ROOT_DIR="$MXE_SYSROOT"
 
       - name: Build
         run: cmake --build build --parallel
