@@ -76,7 +76,10 @@ jobs:
 
       - name: Configure
         run: |
+          # Find MXE toolchain file
+          TOOLCHAIN=$(find /usr/src/mxe -name "mxe-conf.cmake" | head -1)
           cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SDL_FROM_SOURCE=ON \
             -DUSE_CRYPTO=BCrypt
