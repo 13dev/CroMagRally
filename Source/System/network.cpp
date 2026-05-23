@@ -545,10 +545,17 @@ static void HandleNetworkMessage(int fromPeer, const void* data, size_t size)
             break;
 
         case kNetMsgType_Sync:
+            printf("[NET] SYNC handler: payloadSize=%zu, expected=%zu\n",
+                   payloadSize, sizeof(NetSyncMessageType));
             if (payloadSize >= sizeof(NetSyncMessageType))
             {
                 gSyncCount++;
                 gPendingSyncMessage = true;
+                printf("[NET] SYNC accepted, gSyncCount=%d\n", gSyncCount);
+            }
+            else
+            {
+                printf("[NET] SYNC REJECTED: payload too small!\n");
             }
             break;
 
@@ -607,10 +614,17 @@ static void HandleNetworkMessage(int fromPeer, const void* data, size_t size)
                 NetPlayerCharTypeMessage msg;
                 memcpy(&msg, payload, sizeof(msg));
                 int playerNum = msg.playerNum;
+                printf("[NET] VEHICLE_TYPE handler: playerNum=%d, vehicleType=%d, sex=%d, myNum=%d\n",
+                       playerNum, msg.vehicleType, msg.sex, gMyNetworkPlayerNum);
                 if (playerNum >= 0 && playerNum < MAX_PLAYERS)
                 {
                     memcpy(&gPendingVehicleType[playerNum], &msg, sizeof(msg));
                     gPendingVehicleTypeMessage[playerNum] = true;
+                    printf("[NET] VEHICLE_TYPE stored for player %d\n", playerNum);
+                }
+                else
+                {
+                    printf("[NET] VEHICLE_TYPE REJECTED: playerNum %d out of range\n", playerNum);
                 }
             }
             break;

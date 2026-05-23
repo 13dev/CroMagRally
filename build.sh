@@ -27,6 +27,14 @@ case "$ACTION" in
         echo "Running $PRESET build..."
         ./out/$PRESET/CroMagRally
         ;;
+
+    run3)
+        echo "Running 3 instances of $PRESET build..."
+        ./out/$PRESET/CroMagRally 2>&1 | tee client1.log &
+        ./out/$PRESET/CroMagRally 2>&1 | tee client2.log &
+        ./out/$PRESET/CroMagRally 2>&1 | tee client3.log &
+        wait
+        ;;
     list)
         echo "Available presets:"
         cmake --list-presets

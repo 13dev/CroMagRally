@@ -677,6 +677,9 @@ void Net_SendVehicleType(int playerNum, int vehicleType, int sex)
     msg.vehicle_type = (int16_t)vehicleType;
     msg.sex = (int16_t)sex;
 
+    printf("[GNS] Sending VEHICLE_TYPE: playerNum=%d, vehicleType=%d, sex=%d, size=%zu\n",
+           playerNum, vehicleType, sex, sizeof(msg));
+
     gInterface->SendMessageToConnection(gConnection, &msg, sizeof(msg),
         k_nSteamNetworkingSend_Reliable, nullptr);
 }
@@ -810,9 +813,13 @@ static void ProcessReceivedMessages(void)
 
         uint8_t msgType = data[0];
 
-        // Debug: log all incoming messages
+        // Debug: log all incoming messages (always log VEHICLE_TYPE for sync debugging)
         static int sRecvLogCount = 0;
-        if (sRecvLogCount++ < 30)
+        if (msgType == 104)  // VEHICLE_TYPE - always log for debugging sync issues
+        {
+            printf("[GNS] VEHICLE_TYPE received: size=%zu, isHosting=%d\n", size, gIsHosting);
+        }
+        else if (sRecvLogCount++ < 30)
         {
             printf("[GNS] Received msg type=%d, size=%zu, isHosting=%d\n",
                    msgType, size, gIsHosting);
@@ -994,8 +1001,37 @@ static void ProcessReceivedMessages(void)
                 }
             }
         }
+        else if (msgType == (uint8_t)MsgType::CONFIG)
+        {
+            // CONFIG messages are broadcast to all clients, but each client should only
+            // accept the one with their player_num matching their server-assigned index
+            if (size >= sizeof(NetConfigMsg))
+            {
+                const NetConfigMsg* cfg = (const NetConfigMsg*)data;
+                if (cfg->player_num == gLocalPlayerIndex)
+                {
+                    printf("[GNS] Accepting CONFIG: player_num=%d matches our index\n", cfg->player_num);
+                    if (gReceiveCallback)
+                        gReceiveCallback(gIsHosting ? 1 : 0, data, size);
+                }
+                else
+                {
+                    printf("[GNS] Ignoring CONFIG: player_num=%d, our index=%d\n",
+                           cfg->player_num, gLocalPlayerIndex);
+                }
+            }
+        }
         else if (gReceiveCallback)
         {
+            // Log SYNC and VEHICLE_TYPE specifically for debugging sync issues
+            if (msgType == 101)  // SYNC
+            {
+                printf("[GNS] Forwarding SYNC to game callback\n");
+            }
+            else if (msgType == 104)  // VEHICLE_TYPE
+            {
+                printf("[GNS] Forwarding VEHICLE_TYPE to game callback\n");
+            }
             // Forward game messages to callback
             gReceiveCallback(gIsHosting ? 1 : 0, data, size);
         }

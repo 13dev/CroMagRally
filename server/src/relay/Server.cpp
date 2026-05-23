@@ -531,22 +531,42 @@ void Server::relayMessage(HSteamNetConnection sender, const uint8_t* data, size_
               ? k_nSteamNetworkingSend_Reliable
               : k_nSteamNetworkingSend_UnreliableNoDelay;
 
-    // Broadcast SYNC, VEHICLE_TYPE, and PLAYER_NAME to ALL players (not just host)
+    // Broadcast VEHICLE_TYPE and PLAYER_NAME to ALL players (not just host)
     // These messages are needed by all clients for synchronization barriers and lobby display
-    bool shouldBroadcastToAll = (msgType == MsgType::SYNC ||
-                                  msgType == MsgType::VEHICLE_TYPE ||
+    // NOTE: SYNC is NOT broadcast to all - it follows normal routing:
+    //   - Client SYNC ("I'm ready") → forward to host only
+    //   - Host SYNC ("GO signal") → broadcast to all clients
+    bool shouldBroadcastToAll = (msgType == MsgType::VEHICLE_TYPE ||
                                   msgType == MsgType::PLAYER_NAME);
 
     if (shouldBroadcastToAll)
     {
-        // Broadcast to all players except sender
+        // DEBUG: Log all broadcast recipients for VEHICLE_TYPE
+        if (msgType == MsgType::VEHICLE_TYPE)
+        {
+            LOG_SERVER_INFO("Broadcasting VEHICLE_TYPE from conn {} to room {} ({} players)",
+                            sender, room->getCode(), room->getPlayerCount());
+        }
+
+        int sentCount = 0;
         for (auto conn : room->getConnections())
         {
             if (conn != k_HSteamNetConnection_Invalid && conn != sender)
             {
-                m_interface->SendMessageToConnection(conn, data,
+                auto result = m_interface->SendMessageToConnection(conn, data,
                     static_cast<uint32_t>(size), flags, nullptr);
+
+                if (msgType == MsgType::VEHICLE_TYPE)
+                {
+                    LOG_SERVER_INFO("  -> Sent VEHICLE_TYPE to conn {}, result={}", conn, static_cast<int>(result));
+                }
+                sentCount++;
             }
+        }
+
+        if (msgType == MsgType::VEHICLE_TYPE)
+        {
+            LOG_SERVER_INFO("  Total VEHICLE_TYPE sent: {} recipients", sentCount);
         }
         return;  // Don't fall through to host-only routing
     }
