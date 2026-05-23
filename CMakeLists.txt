@@ -19,6 +19,9 @@ project(${GAME_TARGET}
 	VERSION ${GAME_VERSION}
 	LANGUAGES C CXX)
 
+# Include FetchContent early - needed for SDL3, GNS, and spdlog when built from source
+include(FetchContent)
+
 option(BUILD_SDL_FROM_SOURCE "Build SDL from source" OFF)
 option(SDL_STATIC "Static link SDL" OFF)
 option(SANITIZE "Build with asan/ubsan" OFF)
@@ -83,7 +86,6 @@ if(NOT BUILD_SDL_FROM_SOURCE)
 	message("Found pre-built SDL3")
 else()
 	# Fetch SDL3 via FetchContent
-	include(FetchContent)
 	FetchContent_Declare(
 		SDL3
 		GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
