@@ -148,6 +148,10 @@ jobs:
           [properties]
           sys_root = '/usr/x86_64-w64-mingw32/sys-root/mingw'
           pkg_config_libdir = '/usr/x86_64-w64-mingw32/sys-root/mingw/lib/pkgconfig'
+
+          [built-in options]
+          cpp_args = ['-I/usr/x86_64-w64-mingw32/sys-root/mingw/include']
+          c_args = ['-I/usr/x86_64-w64-mingw32/sys-root/mingw/include']
           EOF
           meson setup build-win64 --cross-file cross-mingw64.txt -Dbuildtype=release
 
