@@ -103,6 +103,7 @@ jobs:
             mingw64-gcc-c++ mingw64-cmake cmake \
             mingw64-openssl mingw64-protobuf \
             mingw64-winpthreads-static mingw64-SDL3 \
+            mingw64-spdlog \
             meson ninja-build git zip python3
 
       - uses: actions/checkout@v4

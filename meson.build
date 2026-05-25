@@ -65,7 +65,11 @@ if not gns_dep.found()
 endif
 
 # spdlog (provided by Conan or system pkg-config)
-spdlog_dep = dependency('spdlog', required: true)
+spdlog_dep = dependency('spdlog', required: false)
+if not spdlog_dep.found()
+  # Fallback for Windows cross-compile
+  spdlog_dep = cc.find_library('spdlog', required: true)
+endif
 
 # Math library (Linux)
 m_dep = cc.find_library('m', required: false)
