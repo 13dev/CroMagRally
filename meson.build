@@ -57,7 +57,11 @@ endif
 # Conan uses 'GameNetworkingSockets', system may use lowercase
 gns_dep = dependency('gamenetworkingsockets', required: false)
 if not gns_dep.found()
-  gns_dep = dependency('GameNetworkingSockets', required: true)
+  gns_dep = dependency('GameNetworkingSockets', required: false)
+endif
+if not gns_dep.found()
+  # Fallback for Windows cross-compile: find library directly
+  gns_dep = cc.find_library('GameNetworkingSockets', required: true)
 endif
 
 # spdlog (provided by Conan or system pkg-config)
