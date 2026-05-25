@@ -1,19 +1,30 @@
+# Build directories
 build*/
+builddir/
 out/
-cmake-build-*/
-cache/
-extern/SDL*
-dist/
 
-# IDEs and OS-specific stuff
-.vs/
-.DS_Store
-*.user
-
-CLAUDE.md
+# Logs and temp files
 *.log
-server/.*log
+network_diag.txt
+
+# IDE and editor
+.idea/
+.vs/
+.vscode/
+cmake-build-*/
+*.user
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project-specific
+CLAUDE.md
 skills-lock.json
 .agents
 .claude
 
+# Dependencies (handled by subprojects)
+extern/SDL*

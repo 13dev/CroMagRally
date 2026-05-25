@@ -2,7 +2,13 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/extern/Pomme" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-mingw/_deps/sdl3-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-mxe/_deps/sdl3-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build_proto/_deps/nanopb-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build_proto/_deps/sdl3-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/extern/pomme" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/out/debug/_deps/sdl3-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/mingw-release/_deps/sdl3-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/out/release/_deps/sdl3-src" vcs="Git" />
   </component>
 </project>

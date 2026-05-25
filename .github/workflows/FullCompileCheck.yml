@@ -12,29 +12,40 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - { name: Linux/GCC, os: ubuntu-latest, extraflags: "--system-sdl" }
-          - { name: Linux/Clang, os: ubuntu-latest, extraflags: "--system-sdl", prefix: "CC=clang CXX=clang++"}
-          - { name: Windows/VS2022, os: windows-2022, extraflags: "-G 'Visual Studio 17 2022'" }
+          - { name: Linux/GCC, os: ubuntu-latest }
+          - { name: Linux/Clang, os: ubuntu-latest, cc: clang, cxx: clang++ }
           - { name: Mac, os: macos-latest }
 
     steps:
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt update
-          sudo apt install libsdl3-dev
-
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
 
-      - name: Install GNS via vcpkg
-        shell: bash
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            vcpkg install gamenetworkingsockets:x64-windows
-          else
-            vcpkg install gamenetworkingsockets
-          fi
-          echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $GITHUB_ENV
+          sudo apt update
+          sudo apt install -y meson ninja-build libsdl3-dev libspdlog-dev libgl1-mesa-dev
 
-      - run: ${{matrix.platform.prefix}} python3 build.py --dependencies --configure --build ${{matrix.platform.extraflags}}
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install meson ninja sdl3 spdlog
+
+      - name: Install GNS from source
+        run: |
+          git clone --depth 1 --branch v1.5.1 https://github.com/ValveSoftware/GameNetworkingSockets.git
+          cd GameNetworkingSockets
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF
+          cmake --build . --parallel
+          sudo cmake --install .
+          sudo ldconfig || true
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.platform.cc || 'gcc' }}
+          CXX: ${{ matrix.platform.cxx || 'g++' }}
+        run: meson setup build-release -Dbuildtype=release
+
+      - name: Build
+        run: meson compile -C build-release

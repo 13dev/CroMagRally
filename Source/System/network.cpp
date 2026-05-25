@@ -470,6 +470,9 @@ static void OnClientConnected(int peerIndex)
             }
             printf("OnClientConnected: Player %d (%s) joined (total: %d)\n",
                    playerNum, gPlayerNameStrings[playerNum], gNumGatheredPlayers);
+
+            // Show notification
+            Notification_PlayerJoined((const char*)gPlayerNameStrings[playerNum]);
         }
     }
     else
@@ -488,6 +491,20 @@ static void OnClientDisconnected(int peerIndex)
     {
         int playerNum = peerIndex;
         printf("OnClientDisconnected: Player %d left\n", playerNum);
+
+        // Capture name BEFORE clearing for notification
+        char disconnectedName[32];
+        if (playerNum >= 0 && playerNum < MAX_PLAYERS)
+        {
+            snprintf(disconnectedName, sizeof(disconnectedName), "%s", gPlayerNameStrings[playerNum]);
+        }
+        else
+        {
+            snprintf(disconnectedName, sizeof(disconnectedName), "Player %d", playerNum + 1);
+        }
+
+        // Show notification
+        Notification_PlayerDisconnected(disconnectedName);
 
         // Clear player name from display list
         if (playerNum >= 0 && playerNum < MAX_PLAYERS)
@@ -1519,9 +1536,9 @@ static void PlayerUnexpectedlyLeavesGame(int playerIndex)
     if (playerIndex < 0 || playerIndex >= gNumTotalPlayers)
         return;
 
-    // Turn into a computer player
+    // Turn into a computer player (bot takes over the car)
     gPlayerInfo[playerIndex].isComputer = true;
-    gPlayerInfo[playerIndex].isEliminated = true;
+    // Note: Do NOT set isEliminated - that would block all control including AI
     gNumRealPlayers--;
 
     if (gNumRealPlayers <= 1)

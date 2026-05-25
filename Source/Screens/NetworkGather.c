@@ -88,6 +88,9 @@ static void SetupNetworkGatherScreen(bool isHost)
 
     OGL_SetupGameView(&viewDef);
 
+    // Initialize notifications for player join/disconnect messages
+    InitNotifications();
+
 
                 /************/
                 /* LOAD ART */
@@ -859,6 +862,7 @@ Boolean DoNetworkHostGatherScreen(void)
 cleanup:
     OGL_FadeOutScene(DrawObjects, MoveObjects);
 
+    DisposeNotifications();
     DeleteAllObjects();
     FreeAllSkeletonFiles(-1);
     DisposeAllBG3DContainers();
@@ -1005,6 +1009,7 @@ Boolean DoNetworkJoinScreen(void)
 cleanup:
     OGL_FadeOutScene(DrawObjects, MoveObjects);
 
+    DisposeNotifications();
     DeleteAllObjects();
     FreeAllSkeletonFiles(-1);
     DisposeAllBG3DContainers();

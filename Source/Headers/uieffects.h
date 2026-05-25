@@ -37,6 +37,8 @@ enum
 	kTwitchPreset_NewRecordReveal,
 	kTwitchPreset_ScoreboardFadeIn,
 	kTwitchPreset_PressKeyPrompt,
+	kTwitchPreset_NotificationAppear,
+	kTwitchPreset_NotificationFadeOut,
 	kTwitchPresetCOUNT,
 
 	kTwitchClass_Heartbeat = kTwitchPresetCOUNT,		// deliberately starting above last preset # so presets and classes cannot be mixed up

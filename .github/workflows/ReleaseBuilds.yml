@@ -8,7 +8,6 @@ on:
 
 env:
   GNS_VERSION: v1.5.1
-  CACHE_VERSION: v4  # Must match PrebuildDeps.yml
 
 jobs:
   build-linux-appimage:
@@ -17,53 +16,77 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform:  # Use oldest available Ubuntu for maximum glibc compatibility
-          - { name: x86_64, os: ubuntu-22.04, cache-platform: linux-x64 }
-          - { name: aarch64, os: ubuntu-22.04-arm, cache-platform: linux-arm64 }
+        platform:
+          - { name: x86_64, os: ubuntu-22.04, arch: x86_64 }
+          - { name: aarch64, os: ubuntu-22.04-arm, arch: aarch64 }
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
-
-      - name: Restore prebuilt GNS from cache
-        uses: actions/cache/restore@v4
-        id: gns-cache
-        with:
-          path: gns-prebuilt
-          key: gns-prebuilt-${{ matrix.platform.cache-platform }}-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
 
       - name: Cache APT packages
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
           packages: >-
+            meson ninja-build
             libasound2-dev libpulse-dev libaudio-dev libjack-dev libsndio-dev
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev
             libxi-dev libxss-dev libxkbcommon-dev libdrm-dev libgbm-dev
             libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev
             libibus-1.0-dev libudev-dev fcitx-libs-dev libpipewire-0.3-dev
             libwayland-dev libdecor-0-dev liburing-dev desktop-file-utils
+            libspdlog-dev libssl-dev libprotobuf-dev protobuf-compiler
           version: 1.0
 
-      - name: Verify prebuilt GNS cache
-        if: steps.gns-cache.outputs.cache-hit != 'true'
+      - name: Build SDL3 from source
         run: |
-          echo "::error::Prebuilt GNS cache miss! Run PrebuildDeps.yml workflow manually."
-          exit 1
+          git clone --depth 1 --branch release-3.2.14 https://github.com/libsdl-org/SDL.git
+          cd SDL
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF
+          cmake --build build --parallel
+          sudo cmake --install build
+          sudo ldconfig
 
-      - name: Set up prebuilt GNS
+      - name: Build GNS from source
         run: |
-          echo "Using prebuilt GNS from cache"
-          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/gns-prebuilt" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=${{ github.workspace }}/gns-prebuilt/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          git clone --depth 1 --branch ${{ env.GNS_VERSION }} https://github.com/ValveSoftware/GameNetworkingSockets.git
+          cd GameNetworkingSockets
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF
+          cmake --build build --parallel
+          sudo cmake --install build
+          sudo ldconfig
 
-      - run: echo "ARTIFACT_NAME=$(python3 build.py --print-artifact-name)" >> $GITHUB_ENV
-      - run: python3 build.py --dependencies
-      - run: python3 build.py --configure -DCMAKE_PREFIX_PATH="${{ github.workspace }}/gns-prebuilt"
-      - run: python3 build.py --build
-      - run: python3 build.py --package
+      - name: Configure
+        run: meson setup build-release -Dbuildtype=release
+
+      - name: Build
+        run: meson compile -C build-release
+
+      - name: Package
+        run: |
+          VERSION=$(grep "version:" meson.build | head -1 | sed "s/.*'\([^']*\)'.*/\1/")
+          PKG="CroMagRally-${VERSION}-Linux-${{ matrix.platform.arch }}"
+          mkdir -p "dist/$PKG"
+          cp build-release/CroMagRally "dist/$PKG/"
+          cp -r Data "dist/$PKG/"
+          # Copy shared libraries
+          mkdir -p "dist/$PKG/lib"
+          cp /usr/local/lib/libSDL3.so* "dist/$PKG/lib/" || true
+          cp /usr/local/lib/libGameNetworkingSockets.so* "dist/$PKG/lib/" || true
+          # Create wrapper script
+          cat > "dist/$PKG/run.sh" << 'EOF'
+          #!/bin/bash
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$DIR/lib:$LD_LIBRARY_PATH"
+          exec "$DIR/CroMagRally" "$@"
+          EOF
+          chmod +x "dist/$PKG/run.sh"
+          cd dist && tar -czvf "${PKG}.tar.gz" "$PKG"
+          echo "ARTIFACT_NAME=${PKG}" >> $GITHUB_ENV
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{env.ARTIFACT_NAME}}
-          path: dist/
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dist/*.tar.gz
           compression-level: 0
 
   build-windows:
@@ -76,88 +99,105 @@ jobs:
           dnf install -y \
             mingw64-gcc-c++ mingw64-cmake cmake \
             mingw64-openssl mingw64-protobuf \
-            mingw64-winpthreads-static \
-            ninja-build git zip python3
+            mingw64-winpthreads-static mingw64-SDL3 \
+            meson ninja-build git zip python3
 
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
 
-      - name: Patch Pomme for GCC 16
+      - name: Build GNS for MinGW
         run: |
-          # Add missing cstdint include for GCC 16 compatibility
-          sed -i '1i #include <cstdint>' extern/Pomme/src/Utilities/memstream.cpp
+          git clone --depth 1 --branch v1.5.1 https://github.com/ValveSoftware/GameNetworkingSockets.git
+          cd GameNetworkingSockets
+          mingw64-cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF
+          cmake --build build --parallel
+          cmake --install build --prefix /usr/x86_64-w64-mingw32/sys-root/mingw
 
-      - name: Configure
+      - name: Configure with Meson
         run: |
-          mingw64-cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SDL_FROM_SOURCE=ON
+          cat > cross-mingw64.txt << 'EOF'
+          [binaries]
+          c = 'x86_64-w64-mingw32-gcc'
+          cpp = 'x86_64-w64-mingw32-g++'
+          ar = 'x86_64-w64-mingw32-ar'
+          strip = 'x86_64-w64-mingw32-strip'
+          windres = 'x86_64-w64-mingw32-windres'
+          pkgconfig = 'x86_64-w64-mingw32-pkg-config'
+
+          [host_machine]
+          system = 'windows'
+          cpu_family = 'x86_64'
+          cpu = 'x86_64'
+          endian = 'little'
+
+          [properties]
+          sys_root = '/usr/x86_64-w64-mingw32/sys-root/mingw'
+          pkg_config_libdir = '/usr/x86_64-w64-mingw32/sys-root/mingw/lib/pkgconfig'
+          EOF
+          meson setup build-win64 --cross-file cross-mingw64.txt -Dbuildtype=release
 
       - name: Build
-        run: cmake --build build --parallel
-
-      - name: Bundle DLLs
-        run: python3 scripts/mingw-bundledlls --copy build/CroMagRally.exe || true
+        run: meson compile -C build-win64
 
       - name: Package
         run: |
-          VERSION=$(grep 'set(GAME_VERSION' CMakeLists.txt | sed 's/.*"\(.*\)".*/\1/')
+          VERSION=$(grep "version:" meson.build | head -1 | sed "s/.*'\([^']*\)'.*/\1/")
           PKG="CroMagRally-${VERSION}-Windows-x86_64"
           mkdir -p "dist/$PKG"
-          cp build/CroMagRally.exe "dist/$PKG/"
-          cp build/*.dll "dist/$PKG/" 2>/dev/null || true
-          cp -r build/Data "dist/$PKG/"
-          cp build/ReadMe.txt "dist/$PKG/" 2>/dev/null || true
+          cp build-win64/CroMagRally.exe "dist/$PKG/"
+          cp build-win64/*.dll "dist/$PKG/" 2>/dev/null || true
+          # Copy MinGW runtime DLLs
+          cp /usr/x86_64-w64-mingw32/sys-root/mingw/bin/*.dll "dist/$PKG/" 2>/dev/null || true
+          cp -r Data "dist/$PKG/"
           cd dist && zip -r "${PKG}.zip" "$PKG"
-
-      - name: Get artifact name
-        run: |
-          VERSION=$(grep 'set(GAME_VERSION' CMakeLists.txt | sed 's/.*"\(.*\)".*/\1/')
-          echo "ARTIFACT_NAME=CroMagRally-${VERSION}-Windows-x86_64" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=${PKG}" >> $GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{env.ARTIFACT_NAME}}
+          name: ${{ env.ARTIFACT_NAME }}
           path: dist/*.zip
           compression-level: 0
 
   build-macos:
     runs-on: macos-latest
     timeout-minutes: 45
-    continue-on-error: true  # macOS is optional for release
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
 
-      - name: Restore prebuilt GNS from cache
-        uses: actions/cache/restore@v4
-        id: gns-cache
-        with:
-          path: gns-prebuilt
-          key: gns-prebuilt-macos-arm64-${{ env.GNS_VERSION }}-${{ env.CACHE_VERSION }}
-
-      - name: Verify prebuilt GNS cache
-        if: steps.gns-cache.outputs.cache-hit != 'true'
+      - name: Install dependencies
         run: |
-          echo "::error::Prebuilt GNS cache miss! Run PrebuildDeps.yml workflow manually."
-          exit 1
+          brew install meson ninja sdl3 spdlog openssl protobuf
 
-      - name: Set up prebuilt GNS
+      - name: Build GNS from source
         run: |
-          echo "Using prebuilt GNS from cache"
-          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/gns-prebuilt" >> $GITHUB_ENV
-          echo "DYLD_LIBRARY_PATH=${{ github.workspace }}/gns-prebuilt/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+          git clone --depth 1 --branch v1.5.1 https://github.com/ValveSoftware/GameNetworkingSockets.git
+          cd GameNetworkingSockets
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF
+          cmake --build build --parallel
+          sudo cmake --install build
 
-      - name: Get artifact name
-        run: echo "ARTIFACT_NAME=$(python3 build.py --print-artifact-name)" >> $GITHUB_ENV
-      - run: python3 build.py --dependencies
-      - run: python3 build.py --configure -G Xcode -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_PREFIX_PATH="${{ github.workspace }}/gns-prebuilt"
-      - run: python3 build.py --build
-      - run: python3 build.py --package
+      - name: Configure
+        run: meson setup build-release -Dbuildtype=release
+
+      - name: Build
+        run: meson compile -C build-release
+
+      - name: Package
+        run: |
+          VERSION=$(grep "version:" meson.build | head -1 | sed "s/.*'\([^']*\)'.*/\1/")
+          PKG="CroMagRally-${VERSION}-macOS-arm64"
+          mkdir -p "dist/$PKG"
+          cp build-release/CroMagRally "dist/$PKG/"
+          cp -r Data "dist/$PKG/"
+          cd dist && zip -r "${PKG}.zip" "$PKG"
+          echo "ARTIFACT_NAME=${PKG}" >> $GITHUB_ENV
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{env.ARTIFACT_NAME}}
-          path: dist/
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dist/*.zip
           compression-level: 0
 
   release:

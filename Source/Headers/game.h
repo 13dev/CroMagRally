@@ -45,6 +45,7 @@
 #include "uieffects.h"
 #include "window.h"
 #include "network.h"
+#include "notifications.h"
 
 extern Atlas*					gAtlases[MAX_SPRITE_GROUPS];
 extern BG3DFileContainer		*gBG3DContainerList[MAX_BG3D_GROUPS];

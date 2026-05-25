@@ -1,75 +1,112 @@
-# How to build Cro-Mag Rally
+# Building Cro-Mag Rally
 
-## The easy way: build.py (automated build script)
+This project uses the [Meson](https://mesonbuild.com/) build system with [Conan](https://conan.io/) for dependency management.
 
-`build.py` can produce a game executable from a fresh clone of the repo in a single command. It will work on macOS, Windows and Linux, provided that your system has Python 3, CMake, and an adequate C++ compiler.
+## Prerequisites
 
+### Required Tools
+
+- **Meson** 1.0+ and **Ninja**
+- **Conan** 2.0+ (package manager)
+- **OpenGL** (usually pre-installed)
+
+### Installing Conan
+
+```bash
+pip install conan
+conan profile detect  # One-time setup
 ```
-git clone --recurse-submodules https://github.com/jorio/CroMagRally
-cd CroMagRally
-python3 build.py
+
+### Alternative: System Dependencies
+
+If you prefer system packages instead of Conan, install these manually:
+
+#### Fedora/RHEL
+
+```bash
+sudo dnf install meson ninja-build SDL3-devel spdlog-devel mesa-libGL-devel
+# GameNetworkingSockets: see below
 ```
 
-If you want to build the game **manually** instead, the rest of this document describes how to do just that on each of the big 3 desktop operating systems.
+#### Ubuntu/Debian
 
-## How to build the game manually on macOS
+```bash
+sudo apt install meson ninja-build libspdlog-dev libgl1-mesa-dev
+# SDL3: Use PPA or build from source (not yet in Ubuntu repos)
+# GameNetworkingSockets: see below
+```
 
-1. Install the prerequisites:
-    - Xcode (preferably the latest version)
-    - [CMake](https://formulae.brew.sh/formula/cmake) 3.21+ (installing via Homebrew is recommended)
-1. Clone the repo **recursively**:
-    ```
-    git clone --recurse-submodules https://github.com/jorio/CroMagRally
-    cd CroMagRally
-    ```
-1. Download [SDL3-3.2.8.dmg](https://libsdl.org/release/SDL3-3.2.8.dmg), open it, then browse to SDL3.xcframework/macos-arm64_x86_64. In that folder, copy **SDL3.framework** to the game's **extern** folder.
-1. Prep the Xcode project:
-    ```
-    cmake -G Xcode -S . -B build
-    ```
-1. Now you can open `build/CroMagRally.xcodeproj` in Xcode, or you can just go ahead and build the game:
-    ```
-    cmake --build build --config RelWithDebInfo
-    ```
-1. The game gets built in `build/RelWithDebInfo/CroMagRally.app`. Enjoy!
+#### Arch Linux
 
-## How to build the game manually on Windows
+```bash
+sudo pacman -S meson ninja sdl3 spdlog mesa
+# GameNetworkingSockets: AUR (gamenetworkingsockets) or build from source
+```
 
-1. Install the prerequisites:
-    - Visual Studio 2022 with the C++ toolchain
-    - [CMake](https://cmake.org/download/) 3.21+
-1. Clone the repo **recursively**:
-    ```
-    git clone --recurse-submodules https://github.com/jorio/CroMagRally
-    cd CroMagRally
-    ```
-1. Download [SDL3-devel-3.2.8-VC.zip](https://libsdl.org/release/SDL3-devel-3.2.8-VC.zip), extract it, and copy **SDL3-3.2.8** to the **extern** folder. Rename **SDL3-3.2.8** to just **SDL3**.
-1. Prep the Visual Studio solution:
-    ```
-    cmake -G "Visual Studio 17 2022" -A x64 -S . -B build
-    ```
-1. Now you can open `build/CroMagRally.sln` in Visual Studio, or you can just go ahead and build the game:
-    ```
-    cmake --build build --config Release
-    ```
-1. The game gets built in `build/Release/CroMagRally.exe`. Enjoy!
+#### macOS (Homebrew)
 
-## How to build the game manually on Linux et al.
+```bash
+brew install meson ninja sdl3 spdlog
+# GameNetworkingSockets: see below
+```
 
-1. Install the prerequisites from your package manager:
-    - Any C++20 compiler
-    - CMake 3.21+
-    - SDL3 development library (e.g. "libsdl3-dev" on Ubuntu, "sdl3" on Arch, "SDL3-devel" on Fedora)
-    - OpenGL development libraries (e.g. "libgl1-mesa-dev" on Ubuntu)
-1. Clone the repo **recursively**:
-    ```
-    git clone --recurse-submodules https://github.com/jorio/CroMagRally
-    cd CroMagRally
-    ```
-1. Build the game:
-    ```
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
-    cmake --build build
-    ```
-    If you'd like to enable runtime sanitizers, append `-DSANITIZE=1` to the **first** `cmake` call above.
-1. The game gets built in `build/CroMagRally`. Enjoy!
+#### Building GameNetworkingSockets (if not using Conan)
+
+```bash
+git clone --depth 1 --branch v1.5.1 https://github.com/ValveSoftware/GameNetworkingSockets.git
+cd GameNetworkingSockets
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF
+cmake --build build --parallel
+sudo cmake --install build
+sudo ldconfig  # Linux only
+```
+
+## Building the Game
+
+Use the provided build script:
+
+```bash
+./build.sh debug          # Debug build
+./build.sh release        # Release build
+./build.sh debug run      # Build and run
+./build.sh debug-sanitize # Debug with ASAN/UBSAN
+./build.sh deps           # Show dependency info
+```
+
+Or use Meson directly:
+
+```bash
+meson setup build-release -Dbuildtype=release
+meson compile -C build-release
+```
+
+The game executable is built in the build directory. A symlink to `Data/` is created automatically.
+
+## Building the Relay Server
+
+The relay server enables online multiplayer:
+
+```bash
+cd server
+./build.sh debug          # Debug build
+./build.sh release        # Release build
+./build.sh debug run      # Build and run locally
+./build.sh release docker # Build Docker image
+./build.sh release deploy # Deploy to Fly.io
+```
+
+## Build Options
+
+Meson options can be set with `-D`:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `buildtype` | `debugoptimized` | Build type: `debug`, `release`, `debugoptimized` |
+| `sanitize` | `false` | Enable ASAN/UBSAN sanitizers |
+| `sdl_static` | `false` | Statically link SDL3 |
+
+Example:
+
+```bash
+meson setup build -Dbuildtype=release -Dsanitize=true
+```

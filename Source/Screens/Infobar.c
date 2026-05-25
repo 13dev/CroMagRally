@@ -486,6 +486,10 @@ static const char*	maps[] =
 			/* PANE DIVIDER */
 
 	MakePaneDivider();
+
+			/* NOTIFICATIONS SYSTEM */
+
+	InitNotifications();
 }
 
 
@@ -493,6 +497,8 @@ static const char*	maps[] =
 
 void DisposeInfobar(void)
 {
+	DisposeNotifications();
+
 	if (gInfobarMasterObj)
 	{
 		DeleteObject(gInfobarMasterObj);
@@ -2135,7 +2141,7 @@ static void MovePlayerNameLabel(ObjNode* theNode)
 
 	// Get car position
 	ObjNode* carObj = gPlayerInfo[playerIndex].objNode;
-	if (!carObj)
+	if (!carObj || (carObj->StatusBits & STATUS_BIT_HIDDEN))
 	{
 		theNode->StatusBits |= STATUS_BIT_HIDDEN;
 		return;
