@@ -24,7 +24,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt update
-          sudo apt install -y meson ninja-build libsdl3-dev libspdlog-dev libgl1-mesa-dev
+          sudo apt install -y ninja-build libsdl3-dev libspdlog-dev libgl1-mesa-dev python3-pip
+          pip install meson
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
