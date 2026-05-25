@@ -64,32 +64,47 @@ jobs:
       - name: Build
         run: meson compile -C build-release
 
-      - name: Package
+      - name: Package as AppImage
         run: |
           VERSION=$(grep "version:" meson.build | head -1 | sed "s/.*'\([^']*\)'.*/\1/")
-          PKG="CroMagRally-${VERSION}-Linux-${{ matrix.platform.arch }}"
-          mkdir -p "dist/$PKG"
-          cp build-release/CroMagRally "dist/$PKG/"
-          cp -r Data "dist/$PKG/"
+          ARCH=${{ matrix.platform.arch }}
+          APPDIR="CroMagRally.AppDir"
+
+          # Create AppDir structure
+          mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib" "$APPDIR/usr/share/metainfo" "$APPDIR/usr/share/applications"
+
+          # Copy binary and data
+          cp build-release/CroMagRally "$APPDIR/usr/bin/"
+          cp -r Data "$APPDIR/"
+
+          # Copy packaging files
+          cp packaging/io.jor.cromagrally.desktop "$APPDIR/"
+          cp packaging/io.jor.cromagrally.png "$APPDIR/"
+          cp packaging/io.jor.cromagrally.appdata.xml "$APPDIR/usr/share/metainfo/"
+          cp packaging/io.jor.cromagrally.desktop "$APPDIR/usr/share/applications/"
+          cp packaging/AppRun "$APPDIR/"
+          chmod +x "$APPDIR/AppRun"
+
           # Copy shared libraries
-          mkdir -p "dist/$PKG/lib"
-          cp /usr/local/lib/libSDL3.so* "dist/$PKG/lib/" || true
-          cp /usr/local/lib/libGameNetworkingSockets.so* "dist/$PKG/lib/" || true
-          # Create wrapper script
-          cat > "dist/$PKG/run.sh" << 'EOF'
-          #!/bin/bash
-          DIR="$(cd "$(dirname "$0")" && pwd)"
-          export LD_LIBRARY_PATH="$DIR/lib:$LD_LIBRARY_PATH"
-          exec "$DIR/CroMagRally" "$@"
-          EOF
-          chmod +x "dist/$PKG/run.sh"
-          cd dist && tar -czvf "${PKG}.tar.gz" "$PKG"
-          echo "ARTIFACT_NAME=${PKG}" >> $GITHUB_ENV
+          cp /usr/local/lib/libSDL3.so* "$APPDIR/usr/lib/" || true
+          cp /usr/local/lib/libGameNetworkingSockets.so* "$APPDIR/usr/lib/" || true
+
+          # Download appimagetool
+          wget -q "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage" -O appimagetool
+          chmod +x appimagetool
+
+          # Create AppImage (use --appimage-extract-and-run for FUSE-less environments)
+          ARTIFACT="CroMagRally-${VERSION}-Linux-${ARCH}.AppImage"
+          ./appimagetool --appimage-extract-and-run "$APPDIR" "$ARTIFACT"
+
+          mkdir -p dist
+          mv "$ARTIFACT" dist/
+          echo "ARTIFACT_NAME=CroMagRally-${VERSION}-Linux-${ARCH}" >> $GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: dist/*.tar.gz
+          path: dist/*.AppImage
           compression-level: 0
 
   build-windows:
@@ -117,7 +132,7 @@ jobs:
 
       - name: Install dependencies with Conan
         run: |
-          conan install . --output-folder=build-release --build=missing -s build_type=Release -s compiler.cppstd=20
+          conan install . --output-folder=build-release --build=missing -s build_type=Release -s compiler.cppstd=20 --deployer=full_deploy
 
       - name: Configure with Meson
         run: |
@@ -133,8 +148,9 @@ jobs:
           PKG="CroMagRally-${VERSION}-Windows-x86_64"
           mkdir -p "dist/$PKG"
           cp build-release/CroMagRally.exe "dist/$PKG/"
-          cp build-release/*.dll "dist/$PKG/" 2>/dev/null || true
           cp -r Data "dist/$PKG/"
+          # Copy DLLs from Conan full_deploy output
+          find build-release/full_deploy -name "*.dll" -exec cp {} "dist/$PKG/" \; 2>/dev/null || true
           cd dist && 7z a "${PKG}.zip" "$PKG"
           echo "ARTIFACT_NAME=${PKG}" >> $GITHUB_ENV
 

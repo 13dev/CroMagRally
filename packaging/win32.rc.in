@@ -1,0 +1,30 @@
+#pragma code_page(65001)
+
+// Use uncompressed ICO file. PNG-compressed ICO may trigger false positives with AV software.
+MAINICON ICON "packaging/CroMagRally.ico"
+
+1 VERSIONINFO
+FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILETYPE 1  // VFT_APP
+FILEOS 0x40004  // VOS_NT_WINDOWS32
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName", "Pangea Software, Inc."
+            VALUE "FileDescription", "@PROJECT_FULL_NAME@"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "InternalName", "@PROJECT_NAME@"
+            VALUE "LegalCopyright", "@PROJECT_COPYRIGHT@"
+            VALUE "OriginalFilename", "@PROJECT_NAME@.exe"
+            VALUE "ProductName", "@PROJECT_FULL_NAME@"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1252  // US English, cp1252
+    END
+END
