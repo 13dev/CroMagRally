@@ -93,90 +93,46 @@ jobs:
           compression-level: 0
 
   build-windows:
-    runs-on: ubuntu-latest
-    container: fedora:latest
+    runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - name: Install MinGW toolchain
-        run: |
-          dnf install -y \
-            mingw64-gcc-c++ mingw64-cmake cmake \
-            mingw64-openssl mingw64-protobuf \
-            mingw64-winpthreads-static mingw64-SDL3 \
-            meson ninja-build git zip python3
-
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
 
-      - name: Build spdlog for MinGW
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install tools
         run: |
-          git clone --depth 1 --branch v1.15.3 https://github.com/gabime/spdlog.git
-          cd spdlog
-          mingw64-cmake -B build -DCMAKE_BUILD_TYPE=Release -DSPDLOG_BUILD_SHARED=OFF
-          cmake --build build --parallel
-          cmake --install build --prefix /usr/x86_64-w64-mingw32/sys-root/mingw
+          pip install conan meson ninja
 
-      - name: Build GNS for MinGW
+      - name: Setup Conan
         run: |
-          # Fix case-sensitivity issue: GNS links against Iphlpapi but MinGW has iphlpapi
-          MINGW_LIB=/usr/x86_64-w64-mingw32/sys-root/mingw/lib
-          ln -sf libiphlpapi.a "$MINGW_LIB/libIphlpapi.a" 2>/dev/null || true
+          conan profile detect --force
 
-          git clone --depth 1 --branch v1.5.1 https://github.com/ValveSoftware/GameNetworkingSockets.git
-          cd GameNetworkingSockets
-          mingw64-cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF
-          cmake --build build --parallel
-          cmake --install build --prefix /usr/x86_64-w64-mingw32/sys-root/mingw
-
-          # Manually copy headers if cmake didn't install them
-          DEST=/usr/x86_64-w64-mingw32/sys-root/mingw/include
-          if [ ! -f "$DEST/steam/steamnetworkingsockets.h" ]; then
-            mkdir -p "$DEST/steam"
-            cp -r include/steam/* "$DEST/steam/"
-          fi
-          ls -la "$DEST/steam/" || true
+      - name: Install dependencies with Conan
+        run: |
+          conan install . --output-folder=build-release --build=missing -s build_type=Release
 
       - name: Configure with Meson
         run: |
-          cat > cross-mingw64.txt << 'EOF'
-          [binaries]
-          c = 'x86_64-w64-mingw32-gcc'
-          cpp = 'x86_64-w64-mingw32-g++'
-          ar = 'x86_64-w64-mingw32-ar'
-          strip = 'x86_64-w64-mingw32-strip'
-          windres = 'x86_64-w64-mingw32-windres'
-          pkgconfig = 'x86_64-w64-mingw32-pkg-config'
-
-          [host_machine]
-          system = 'windows'
-          cpu_family = 'x86_64'
-          cpu = 'x86_64'
-          endian = 'little'
-
-          [properties]
-          sys_root = '/usr/x86_64-w64-mingw32/sys-root/mingw'
-          pkg_config_libdir = '/usr/x86_64-w64-mingw32/sys-root/mingw/lib/pkgconfig'
-
-          [built-in options]
-          cpp_args = ['-I/usr/x86_64-w64-mingw32/sys-root/mingw/include']
-          c_args = ['-I/usr/x86_64-w64-mingw32/sys-root/mingw/include']
-          EOF
-          meson setup build-win64 --cross-file cross-mingw64.txt -Dbuildtype=release
+          meson setup build-release --native-file build-release/conan_meson_native.ini -Dbuildtype=release
 
       - name: Build
-        run: meson compile -C build-win64
+        run: meson compile -C build-release
 
       - name: Package
+        shell: bash
         run: |
           VERSION=$(grep "version:" meson.build | head -1 | sed "s/.*'\([^']*\)'.*/\1/")
           PKG="CroMagRally-${VERSION}-Windows-x86_64"
           mkdir -p "dist/$PKG"
-          cp build-win64/CroMagRally.exe "dist/$PKG/"
-          cp build-win64/*.dll "dist/$PKG/" 2>/dev/null || true
-          # Copy MinGW runtime DLLs
-          cp /usr/x86_64-w64-mingw32/sys-root/mingw/bin/*.dll "dist/$PKG/" 2>/dev/null || true
+          cp build-release/CroMagRally.exe "dist/$PKG/"
+          cp build-release/*.dll "dist/$PKG/" 2>/dev/null || true
           cp -r Data "dist/$PKG/"
-          cd dist && zip -r "${PKG}.zip" "$PKG"
+          cd dist && 7z a "${PKG}.zip" "$PKG"
           echo "ARTIFACT_NAME=${PKG}" >> $GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
