@@ -103,11 +103,18 @@ jobs:
             mingw64-gcc-c++ mingw64-cmake cmake \
             mingw64-openssl mingw64-protobuf \
             mingw64-winpthreads-static mingw64-SDL3 \
-            mingw64-spdlog \
             meson ninja-build git zip python3
 
       - uses: actions/checkout@v4
         with: {submodules: 'recursive'}
+
+      - name: Build spdlog for MinGW
+        run: |
+          git clone --depth 1 --branch v1.15.3 https://github.com/gabime/spdlog.git
+          cd spdlog
+          mingw64-cmake -B build -DCMAKE_BUILD_TYPE=Release -DSPDLOG_BUILD_SHARED=OFF
+          cmake --build build --parallel
+          cmake --install build --prefix /usr/x86_64-w64-mingw32/sys-root/mingw
 
       - name: Build GNS for MinGW
         run: |
