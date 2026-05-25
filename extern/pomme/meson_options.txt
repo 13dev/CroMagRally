@@ -1,0 +1,43 @@
+# Pomme meson build options
+
+option('pomme_no_graphics',
+  type: 'boolean',
+  value: false,
+  description: 'Disable graphics support',
+)
+
+option('pomme_no_input',
+  type: 'boolean',
+  value: false,
+  description: 'Disable input support',
+)
+
+option('pomme_no_mp3',
+  type: 'boolean',
+  value: false,
+  description: 'Disable MP3 support',
+)
+
+option('pomme_no_qd3d',
+  type: 'boolean',
+  value: false,
+  description: 'Disable QD3D support',
+)
+
+option('pomme_no_video',
+  type: 'boolean',
+  value: false,
+  description: 'Disable video support',
+)
+
+option('pomme_no_sound_formats',
+  type: 'boolean',
+  value: false,
+  description: 'Disable sound format support',
+)
+
+option('pomme_no_sound_mixer',
+  type: 'boolean',
+  value: false,
+  description: 'Disable sound mixer support',
+)

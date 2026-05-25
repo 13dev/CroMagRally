@@ -1,0 +1,5 @@
+[wrap-file]
+directory = pomme
+
+[provide]
+pomme = pomme_dep
