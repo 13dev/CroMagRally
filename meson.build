@@ -1,6 +1,6 @@
 
 project('cromagrally', 'c', 'cpp',
-  version: '1.8.22',
+  version: '1.9.0',
   license: 'GPL-3.0-or-later',
   default_options: [
     'c_std=c17',
@@ -8,7 +8,7 @@ project('cromagrally', 'c', 'cpp',
     'warning_level=2',
     'buildtype=debugoptimized',
   ],
-  meson_version: '>=1.0.0',
+  meson_version: '1.9.0',
   subproject_dir: 'extern',
 )
 
