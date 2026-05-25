@@ -1,4 +1,3 @@
-
 project('cromagrally', 'c', 'cpp',
   version: '1.11.0',
   license: 'GPL-3.0-or-later',
@@ -40,8 +39,12 @@ opt_sdl_static = get_option('sdl_static')
 # DEPENDENCIES
 #------------------------------------------------------------------------------
 
-# OpenGL
-opengl_dep = dependency('opengl', required: true)
+# OpenGL (use system method for Windows cross-compile compatibility)
+if host_machine.system() == 'windows'
+  opengl_dep = cc.find_library('opengl32')
+else
+  opengl_dep = dependency('opengl', required: true)
+endif
 
 # SDL3 (provided by Conan or system pkg-config)
 # Conan uses 'sdl', system packages use 'sdl3'
