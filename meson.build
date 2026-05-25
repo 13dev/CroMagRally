@@ -8,7 +8,7 @@ project('cromagrally', 'c', 'cpp',
     'warning_level=2',
     'buildtype=debugoptimized',
   ],
-  meson_version: '1.9.0',
+  meson_version: '>= 1.0.0',
   subproject_dir: 'extern',
 )
 

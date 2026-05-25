@@ -107,6 +107,10 @@ jobs:
 
       - name: Build GNS for MinGW
         run: |
+          # Fix case-sensitivity issue: GNS links against Iphlpapi but MinGW has iphlpapi
+          MINGW_LIB=/usr/x86_64-w64-mingw32/sys-root/mingw/lib
+          ln -sf libiphlpapi.a "$MINGW_LIB/libIphlpapi.a" 2>/dev/null || true
+
           git clone --depth 1 --branch v1.5.1 https://github.com/ValveSoftware/GameNetworkingSockets.git
           cd GameNetworkingSockets
           mingw64-cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF

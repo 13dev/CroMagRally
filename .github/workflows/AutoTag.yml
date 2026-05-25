@@ -109,7 +109,7 @@ jobs:
         if: steps.bump.outputs.type != 'none'
         run: |
           NEW_VERSION="${{ steps.new_version.outputs.version }}"
-          sed -i "s/version: '[^']*'/version: '${NEW_VERSION}'/" meson.build
+          sed -i "s/^\([[:space:]]*\)version: '[^']*'/\1version: '${NEW_VERSION}'/" meson.build
           echo "Updated meson.build to version $NEW_VERSION"
           grep "version:" meson.build | head -1
 
