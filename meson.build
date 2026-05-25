@@ -1,5 +1,5 @@
 project('cromagrally', 'c', 'cpp',
-  version: '1.11.2',
+  version: '1.11.3',
   license: 'GPL-3.0-or-later',
   default_options: [
     'c_std=c17',
