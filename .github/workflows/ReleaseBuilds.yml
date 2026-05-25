@@ -128,6 +128,14 @@ jobs:
           cmake --build build --parallel
           cmake --install build --prefix /usr/x86_64-w64-mingw32/sys-root/mingw
 
+          # Manually copy headers if cmake didn't install them
+          DEST=/usr/x86_64-w64-mingw32/sys-root/mingw/include
+          if [ ! -f "$DEST/steam/steamnetworkingsockets.h" ]; then
+            mkdir -p "$DEST/steam"
+            cp -r include/steam/* "$DEST/steam/"
+          fi
+          ls -la "$DEST/steam/" || true
+
       - name: Configure with Meson
         run: |
           cat > cross-mingw64.txt << 'EOF'
