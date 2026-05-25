@@ -105,26 +105,23 @@ jobs:
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "New version: $NEW_VERSION"
 
-      - name: Update CMakeLists.txt
+      - name: Update meson.build
         if: steps.bump.outputs.type != 'none'
         run: |
           NEW_VERSION="${{ steps.new_version.outputs.version }}"
-          sed -i "s/set(GAME_VERSION[[:space:]]*\"[^\"]*\")/set(GAME_VERSION\t\t\t\"${NEW_VERSION}\")/" CMakeLists.txt
-          echo "Updated CMakeLists.txt to version $NEW_VERSION"
-          grep GAME_VERSION CMakeLists.txt
+          sed -i "s/version: '[^']*'/version: '${NEW_VERSION}'/" meson.build
+          echo "Updated meson.build to version $NEW_VERSION"
+          grep "version:" meson.build | head -1
 
       - name: Commit and tag
         if: steps.bump.outputs.type != 'none'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           NEW_VERSION="${{ steps.new_version.outputs.version }}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
 
-          git add CMakeLists.txt
+          git add meson.build
           git commit -m "chore: bump version to ${NEW_VERSION} [skip ci]"
           git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
 
