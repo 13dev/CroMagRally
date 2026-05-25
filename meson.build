@@ -60,8 +60,13 @@ if not gns_dep.found()
   gns_dep = dependency('GameNetworkingSockets', required: false)
 endif
 if not gns_dep.found()
-  # Fallback for Windows cross-compile: find library directly
-  gns_dep = cc.find_library('GameNetworkingSockets', required: true)
+  # Fallback for Windows cross-compile: find library and include dir
+  gns_lib = cc.find_library('GameNetworkingSockets', required: true)
+  # GNS headers are in the sysroot include directory
+  gns_dep = declare_dependency(
+    dependencies: gns_lib,
+    include_directories: include_directories('/usr/x86_64-w64-mingw32/sys-root/mingw/include', is_system: true)
+  )
 endif
 
 # spdlog (provided by Conan or system pkg-config)
