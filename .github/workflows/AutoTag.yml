@@ -115,11 +115,14 @@ jobs:
 
       - name: Commit and tag
         if: steps.bump.outputs.type != 'none'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           NEW_VERSION="${{ steps.new_version.outputs.version }}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
 
           git add CMakeLists.txt
           git commit -m "chore: bump version to ${NEW_VERSION} [skip ci]"
