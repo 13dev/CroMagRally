@@ -114,7 +114,7 @@ jobs:
 
       - name: Install dependencies with Conan
         run: |
-          conan install . --output-folder=build-release --build=missing -s build_type=Release
+          conan install . --output-folder=build-release --build=missing -s build_type=Release -s compiler.cppstd=20
 
       - name: Configure with Meson
         run: |
